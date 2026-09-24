@@ -290,9 +290,11 @@ export function compose(
   for (const tool of new Set(missingTools.map((t) => t.tool))) {
     const owners = missingTools.filter((t) => t.tool === tool).map((t) => t.owner);
     const droppable = owners.filter((o) => o !== stack?.id);
-    const fix = droppable.length
-      ? `install it or rerun with ${droppable.map((o) => `--without ${o}`).join(" ")}`
-      : "install it before running verify";
+    const fix = !droppable.length
+      ? "install it before running verify"
+      : addMode
+        ? `install it, or don't add ${droppable.join(", ")}`
+        : `install it or rerun with ${droppable.map((o) => `--without ${o}`).join(" ")}`;
     warnings.push(
       `${owners.join(", ")} ${owners.length === 1 ? "needs" : "need"} ${tool}, which isn't on PATH; ${fix}`,
     );

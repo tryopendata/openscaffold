@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isVersionSensitive, validatePath } from "../src/commands/validate.js";
 
 const FIXTURES = join(import.meta.dirname, "fixtures");
@@ -20,6 +20,23 @@ beforeAll(() => {
   mkdirSync(join(emptyBundled, "fragments"));
 });
 afterAll(() => rmSync(emptyBundled, { recursive: true, force: true }));
+
+// Per-test scratch dirs, so tests that edit a registry copy never share state.
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+function scratch(): string {
+  const d = mkdtempSync(join(tmpdir(), "os-validate-"));
+  dirs.push(d);
+  return d;
+}
+/** A writable copy of the good registry fixture. */
+function goodCopy(): string {
+  const root = join(scratch(), "registry");
+  cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+  return root;
+}
 
 const validate = (path: string, bundledDir = emptyBundled) => validatePath(path, { bundledDir });
 
@@ -43,28 +60,64 @@ describe("validate", () => {
   });
 
   it("reports malformed conditional blocks in entry bodies", () => {
-    const root = mkdtempSync(join(tmpdir(), "os-validate-cond-"));
-    try {
-      cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
-      const file = join(root, "fragments", "extra", "FRAGMENT.md");
-      writeFileSync(
-        file,
-        `${readFileSync(file, "utf8")}\n<!-- openscaffold:when color=blue -->\nhidden\n`,
-      );
-      const report = validate(root);
-      const messages = report.errors
-        .filter((e) => e.file === "fragments/extra/FRAGMENT.md")
-        .map((e) => e.message);
-      expect(report.ok).toBe(false);
-      expect(messages.some((m) => m.startsWith("conditional block:"))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = goodCopy();
+    const file = join(root, "fragments", "extra", "FRAGMENT.md");
+    writeFileSync(
+      file,
+      `${readFileSync(file, "utf8")}\n<!-- openscaffold:when color=blue -->\nhidden\n`,
+    );
+    const report = validate(root);
+    const messages = report.errors
+      .filter((e) => e.file === "fragments/extra/FRAGMENT.md")
+      .map((e) => e.message);
+    expect(report.ok).toBe(false);
+    expect(messages.some((m) => m.startsWith("conditional block:"))).toBe(true);
+  });
+
+  it("reports conditional errors at their line in the file, not the body", () => {
+    const root = goodCopy();
+    const file = join(root, "fragments", "extra", "FRAGMENT.md");
+    // The fixture is 16 lines; the blank line and marker land on lines 17 and 18.
+    writeFileSync(file, `${readFileSync(file, "utf8")}\n<!-- openscaffold:when color=blue -->\n`);
+    const messages = validate(root).errors.map((e) => e.message);
+    expect(messages).toContain(
+      'conditional block: line 18: unknown condition key "color" (use stack, tag, mode, preset, with)',
+    );
+    expect(messages).toContain(
+      "conditional block: line 18: openscaffold:when block is never closed",
+    );
+  });
+
+  it("rejects conditions on unknown stack or fragment ids and warns on undeclared tags", () => {
+    const root = goodCopy();
+    const file = join(root, "fragments", "extra", "FRAGMENT.md");
+    writeFileSync(
+      file,
+      `${readFileSync(file, "utf8")}
+<!-- openscaffold:when stack=demo,dmeo with=base,bse tag=web,webb -->
+hidden
+<!-- openscaffold:end -->
+`,
+    );
+    const report = validate(root);
+    const at = (list: typeof report.errors) =>
+      list.filter((e) => e.file === "fragments/extra/FRAGMENT.md").map((e) => e.message);
+    expect(at(report.errors)).toEqual([
+      'conditional block: line 18: stack=dmeo is not a known stack; the block would never be kept (did you mean "demo"?)',
+      'conditional block: line 18: with=bse is not a known fragment; the block would never be kept (did you mean "base"?)',
+    ]);
+    expect(at(report.warnings)).toEqual([
+      "conditional block: line 18: tag=webb isn't declared by any stack in the registry, so the block is only kept for stacks that add it",
+    ]);
   });
 
   describe("bad registry", () => {
-    const report = validatePath(join(FIXTURES, "registry-bad"), {
-      bundledDir: join(FIXTURES, "registry-good"),
+    // Validating is read-only, so one report is shared across these assertions.
+    let report: ReturnType<typeof validatePath>;
+    beforeAll(() => {
+      report = validatePath(join(FIXTURES, "registry-bad"), {
+        bundledDir: join(FIXTURES, "registry-good"),
+      });
     });
     const errorFor = (file: string) =>
       report.errors
@@ -72,7 +125,7 @@ describe("validate", () => {
         .map((e) => e.message)
         .join("\n");
 
-    it("fails", () => expect(report.ok).toBe(false));
+    it("is not ok", () => expect(report.ok).toBe(false));
 
     it("reports schema errors with field paths", () => {
       const msg = errorFor("fragments/bad-schema/FRAGMENT.md");
@@ -118,8 +171,7 @@ describe("validate", () => {
   });
 
   it("dry-runs each optional fragment against the stack", () => {
-    const root = join(emptyBundled, "optional-clash");
-    cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+    const root = goodCopy();
     const stackFile = join(root, "stacks", "demo", "STACK.md");
     writeFileSync(
       stackFile,
@@ -140,8 +192,7 @@ describe("validate", () => {
   });
 
   it("reports symlinks in files/ as errors", () => {
-    const root = join(emptyBundled, "with-symlink");
-    cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+    const root = goodCopy();
     symlinkSync("/etc/hosts", join(root, "fragments", "base", "files", "hosts"));
     symlinkSync("..", join(root, "fragments", "base", "files", "loop"));
     const report = validate(root);
@@ -155,8 +206,7 @@ describe("validate", () => {
   });
 
   it("accepts mergeable JSON templates with placeholders outside quotes", () => {
-    const root = join(emptyBundled, "unquoted");
-    cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+    const root = goodCopy();
     const settings = join(root, "fragments", "base", "adapters", "claude", ".claude");
     rmSync(settings, { recursive: true, force: true });
     mkdirSync(settings, { recursive: true });
@@ -169,8 +219,9 @@ describe("validate", () => {
   });
 
   it("rejects a path that isn't a registry or entry", () => {
-    expect(() => validate(join(emptyBundled, "nope"))).toThrow(/not a directory/);
-    expect(() => validate(tmpdir())).toThrow(/no STACK.md, FRAGMENT.md, stacks\/, or fragments\//);
+    const empty = scratch();
+    expect(() => validate(join(empty, "nope"))).toThrow(/not a directory/);
+    expect(() => validate(empty)).toThrow(/no STACK.md, FRAGMENT.md, stacks\/, or fragments\//);
   });
 
   it("recognizes version-sensitive filenames", () => {

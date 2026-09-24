@@ -13,7 +13,7 @@ tools: [bun, make, git]
 decisions:
   - "Production site URL for canonical links, sitemap, and RSS (default: https://example.com)."
   - "Generated Open Graph images per post with satori (default: off; a static image in public/)."
-  - "Trailing slash: never, with file-style build output (default), or always."
+  - "Trailing slash: `never` with file-style build output (the default), or `always`."
   - "Drafts: hidden from production pages, sitemap, and RSS; visible in dev at their URL (default)."
   - "Authors: one author in site config (default), or an authors data file."
 env:
@@ -67,7 +67,7 @@ src/styles/global.css        Tailwind entry, typography plugin, theme tokens
 ## Conventions
 
 - **Minimal Astro.** The only `.astro` files are `BaseLayout.astro` and page routes, which load content and render React components. Every reusable component is `.tsx`. Add `client:*` only where interactivity is needed.
-- **Schema.** `schema.ts` exports the zod object (import `z` from Astro's re-export); `content.config.ts` wraps it with the `glob` loader over `src/content/blog/**/*.{md,mdx}`. Fields: `title`, `description`, `date` (coerced), `updated?`, `author`, `tags` (default `[]`), `status` (`draft` | `published` | `unlisted`, default `published`), `cover?`, `ogImage?`. `unlisted` renders at its URL but stays out of the index, sitemap, and RSS.
+- **Schema.** `schema.ts` exports the zod object (import `z` from `astro/zod`); `content.config.ts` wraps it with the `glob` loader over `src/content/blog/**/*.{md,mdx}`. Fields: `title`, `description`, `date` (coerced), `updated?`, `author`, `tags` (default `[]`), `status` (`draft` | `published` | `unlisted`, default `published`), `cover?`, `ogImage?`. `unlisted` renders at its URL but stays out of the index, sitemap, and RSS.
 - **One place decides visibility.** `lib/posts.ts`: `getPublishedPosts()` (published, newest first), `getRoutablePosts()` (published + unlisted, plus drafts when `import.meta.env.DEV`), `slugFor(entry)` (filename minus extension; strip it defensively, since the loader's id may keep it). Pages, RSS, OG, and sitemap all use these.
 - **Sitemap** filters drafts, unlisted, and `og/` routes. The config can't import `astro:content`, so read status from the MDX frontmatter directly.
 - **RSS** lists published posts newest first. With `trailingSlash: "never"`, pass `trailingSlash: false` to `@astrojs/rss` so item links match.

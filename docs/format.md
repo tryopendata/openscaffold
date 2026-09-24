@@ -96,13 +96,15 @@ Wire the client into the Makefile's `test` target.
 | `preset` | `default` or `sandbox`. |
 | `with` | A fragment id present in the composed project (for `add`, including fragments applied earlier). |
 
-Commas mean OR within a key (`stack=go-cli,python-react`). Several keys on one marker must all match (`tag=web preset=sandbox`). Blocks don't nest. When the brief is written, a block whose condition doesn't match is removed entirely, and a matching block loses only its two marker lines. Each marker must be on its own line. `validate` reports unknown keys, bad `mode`/`preset` values, nesting, and unclosed blocks. `show` prints the body unfiltered.
+Commas mean OR within a key (`stack=go-cli,python-react`). Several keys on one marker must all match (`tag=web preset=sandbox`). Blocks don't nest. When the brief is written, a block whose condition doesn't match is removed entirely, and a matching block loses only its two marker lines. Each marker must be on its own line. `validate` reports unknown keys, bad `mode`/`preset` values, `stack`/`with` values that aren't known stack or fragment ids, nesting, and unclosed blocks, and warns on a `tag` no stack declares. Line numbers in its messages are lines of the STACK.md or FRAGMENT.md file. `show` prints the body unfiltered.
 
 ## files/ and adapters/
 
 Only version-agnostic content goes in `files/`: an AGENTS.md skeleton, agent hooks and settings, lefthook config, `.editorconfig`, `.gitignore`, `.env.example`, docs skeletons, Makefile targets that call tools by name. Tool configs whose schema changes between releases (`.golangci.yml`, `vitest.config.ts`, `tsconfig.json`, `pyproject.toml`, `astro.config.mjs`, CI workflows, Dockerfiles) are described in prose instead. `validate` warns when it sees a known version-sensitive filename in `files/`.
 
 `adapters/<agent>/` holds files that only make sense for one agent: `.claude/settings.json` and hooks for `claude`, `.cursor/rules/` for `cursor`, and so on. AGENTS.md is the canonical instruction file for every agent; an agent with no adapter still gets it.
+
+Entries can't ship symlinks, anywhere in the entry directory. Reading an entry with one fails with `entry_symlink`, and `validate` reports each link. When an entry from the main registry has a symlink, an unknown template variable, or a malformed conditional block, it's skipped with a warning and the next copy down (usually bundled) is used instead.
 
 ### Templating
 
@@ -116,7 +118,7 @@ Each output path has exactly one owner. If two entries write the same path, comp
 
 Shared prose files (AGENTS.md sections, README, Makefile targets) are never merged by the CLI. The owning fragment ships the skeleton; other fragments describe their additions in prose and the agent writes them.
 
-On `openscaffold add` against an existing repo, files that already exist are never overwritten. openscaffold's version of each one is written to `.openscaffold/incoming/<path>`, and the brief lists them as "merge needed" so the agent can reconcile the two and then delete `incoming/`.
+On `openscaffold add` against an existing repo, files that already exist are never overwritten. openscaffold's version of each one is written to `.openscaffold/incoming/<path>`, and the brief lists them as "merge needed" so the agent can reconcile the two and then delete `incoming/`. If a later `add` finds files still in `incoming/`, it keeps them and lists them in the new brief again; a path the new run parks replaces the older copy.
 
 ## Verify
 
@@ -147,4 +149,4 @@ Serve steps run in their own process group, and the whole group is killed after 
 
 ## Trust
 
-Bundled entries, the main registry (reviewed by PR), and your own `~/.openscaffold` and `./.openscaffold` are trusted. The exception is a `./.openscaffold` entry that shadows a bundled or registry id: a cloned repo can ship one, so it produces a warning and is marked untrusted (`trusted: false` in `list --json` and `show --json`). When any composed entry is untrusted, `new` and `add` never auto-launch an agent; they print the brief path and the instruction instead. `new` and `add` never run commands from an entry. `verify` runs the commands in the project's `manifest.yaml` and prints each one before running it.
+Bundled entries, the main registry (reviewed by PR), and your own `~/.openscaffold` and `./.openscaffold` are trusted. The exception is a `./.openscaffold` entry that shadows a bundled, registry, or `~/.openscaffold` id: a cloned repo can ship one, so it produces a warning and is marked untrusted (`trusted: false` in `list --json` and `show --json`). When any composed entry is untrusted, `new` and `add` never auto-launch an agent; they print the brief path and the instruction instead. When openscaffold is already running inside an agent, the handoff message names the untrusted entries and tells the agent to get the user's confirmation before carrying out the brief. `new` and `add` never run commands from an entry. `verify` runs the commands in the project's `manifest.yaml` and prints each one before running it.

@@ -10,6 +10,14 @@ import { OpenScaffoldError } from "./errors.js";
 import { printJson } from "./output.js";
 import { VERSION } from "./version.js";
 
+// A closed pipe (`openscaffold list | head`) isn't an error; stop quietly.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(process.exitCode ?? 0);
+    throw err;
+  });
+}
+
 const args = process.argv.slice(2);
 // Decided from argv rather than parsed options, so parse errors are reported as JSON too.
 const json = args.includes("--json");

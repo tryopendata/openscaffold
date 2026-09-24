@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OpenScaffoldError } from "../src/errors.js";
-import { deepMerge, renderFiles, renderTemplate } from "../src/render.js";
+import { assertInsideProject, deepMerge, renderFiles, renderTemplate } from "../src/render.js";
 import type { FileOp } from "../src/types.js";
 
 const VARS = {
@@ -235,5 +235,65 @@ describe("renderFiles", () => {
       }),
     ).toThrow(/outside/);
     expect(existsSync(join(outside, "incoming"))).toBe(false);
+  });
+  it("replaces a file an earlier run parked under incoming", () => {
+    writeFileSync(join(out, "README.md"), "mine\n");
+    const incoming = join(out, ".openscaffold/incoming");
+    renderFiles([op("README.md", "first")], out, VARS, { incomingDir: incoming });
+    const result = renderFiles([op("README.md", "second", { owner: "p" })], out, VARS, {
+      incomingDir: incoming,
+    });
+    expect(result).toEqual({ written: [], skipped: ["README.md"] });
+    expect(readFileSync(join(incoming, "README.md"), "utf8")).toBe("second");
+    expect(read("README.md")).toBe("mine\n");
+  });
+
+  it("writes nothing when a parked file can't be written under incoming", () => {
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(out, "README.md"), "mine\n");
+    const incoming = join(out, ".openscaffold/incoming");
+    mkdirSync(incoming, { recursive: true });
+    symlinkSync(join(outside, "README.md"), join(incoming, "README.md"));
+    expect(() =>
+      renderFiles([op("a.txt", "a"), op("README.md", "theirs")], out, VARS, {
+        incomingDir: incoming,
+      }),
+    ).toThrow(OpenScaffoldError);
+    expect(existsSync(join(out, "a.txt"))).toBe(false);
+    expect(existsSync(join(outside, "README.md"))).toBe(false);
+  });
+
+  it("writes nothing when a later incoming path resolves outside the project", () => {
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(out, "README.md"), "mine\n");
+    symlinkSync(outside, join(out, ".openscaffold"));
+    expect(() =>
+      renderFiles([op("a.txt", "a"), op("README.md", "theirs")], out, VARS, {
+        incomingDir: join(out, ".openscaffold/incoming"),
+      }),
+    ).toThrow(/outside/);
+    expect(existsSync(join(out, "a.txt"))).toBe(false);
+  });
+});
+
+describe("assertInsideProject", () => {
+  it("accepts paths in the project, including ones that don't exist yet", () => {
+    expect(() => assertInsideProject(out, join(out, ".openscaffold/BRIEF.md"))).not.toThrow();
+    expect(() => assertInsideProject(join(out, "new"), join(out, "new/a/b.txt"))).not.toThrow();
+  });
+
+  it("refuses a path under a symlinked directory or at a symlink that leads outside", () => {
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(out, ".openscaffold"));
+    expect(() => assertInsideProject(out, join(out, ".openscaffold/BRIEF.md"))).toThrow(
+      expect.objectContaining({ code: "render_outside_project" }),
+    );
+    symlinkSync(join(outside, "notes.txt"), join(out, "notes.txt"));
+    expect(() => assertInsideProject(out, join(out, "notes.txt"))).toThrow(
+      expect.objectContaining({ code: "render_outside_project" }),
+    );
   });
 });

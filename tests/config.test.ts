@@ -24,7 +24,7 @@ describe("loadUserConfig", () => {
     expect(loadUserConfig(home)).toEqual(defaults);
   });
 
-  it("reads values", () => {
+  it("reads every supported key from config.yaml", () => {
     writeConfig(
       "always: [rr, ce-plugin]\nagents: [claude, codex]\nauthor: Riley\npreset: sandbox\n",
     );

@@ -200,6 +200,11 @@ export function buildBrief(input: BriefInput): string {
   const rules = [
     "Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.",
   ];
+  if (input.mode === "new") {
+    rules.push(
+      "The project root is already a git repository with no commits. Skip generators' own git setup, and commit once verify passes.",
+    );
+  }
   if (input.written.length) {
     rules.push(
       `openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.\n${summarizePaths(
@@ -235,7 +240,7 @@ export function buildBrief(input: BriefInput): string {
       [
         "## Decisions",
         input.yes
-          ? "Use the stated defaults, even where an item says to ask. Don't ask the user; list the choices you made in your final summary."
+          ? "Use each item's default without asking the user, and list the choices you made in your final summary."
           : 'Confirm these with the user before you start building. Ask once, in a single short message, and include each default so they can reply "defaults".',
         bullets(plan.decisions),
       ].join("\n\n"),

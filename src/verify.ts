@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { constants } from "node:os";
 import { resolve } from "node:path";
 import { execa } from "execa";
 import { OpenScaffoldError } from "./errors.js";
@@ -27,6 +28,8 @@ export interface VerifyReport {
   ok: boolean;
   /** Stopped by SIGINT/SIGTERM. */
   interrupted: boolean;
+  /** The signal that stopped the run, when interrupted. */
+  signal?: NodeJS.Signals;
   projectDir: string;
   steps: StepResult[];
   warnings: string[];
@@ -109,6 +112,11 @@ class OutputTail {
     const out = lines.slice(-TAIL_LINES).join("\n");
     return out === "" ? undefined : out;
   }
+}
+
+/** 128 + the signal number, the shell convention for a command stopped by a signal. */
+export function signalExitCode(signal: NodeJS.Signals): number {
+  return 128 + constants.signals[signal];
 }
 
 function killGroup(pid: number, signal: NodeJS.Signals): void {
@@ -210,16 +218,18 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
   // Process groups currently running; killed on interrupt or process exit.
   const active = new Set<number>();
   let interrupted = false;
+  let signal: NodeJS.Signals | undefined;
   let onInterrupt: (() => void) | undefined;
 
-  const onSignal = (signal: NodeJS.Signals) => {
+  const onSignal = (received: NodeJS.Signals) => {
     if (interrupted) {
       for (const pid of active) killGroup(pid, "SIGKILL");
-      process.exit(130);
+      process.exit(signalExitCode(received));
     }
     interrupted = true;
+    signal = received;
     addWarning(
-      `interrupted by ${signal}: stopped the running step, running teardown (again to force)`,
+      `interrupted by ${received}: stopped the running step, running teardown (again to force)`,
     );
     onInterrupt?.();
   };
@@ -479,6 +489,7 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
   return {
     ok: totals.failed === 0 && !interrupted,
     interrupted,
+    ...(signal ? { signal } : {}),
     projectDir,
     steps: results,
     warnings,

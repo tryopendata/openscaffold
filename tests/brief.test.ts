@@ -172,7 +172,7 @@ describe("BRIEF.md", () => {
   it("new --sandbox", async () => {
     const r = await runNew({ ...sb.opts, stack: "app", dir: "demo", sandbox: true });
     const brief = readFileSync(r.brief, "utf8");
-    expect(brief).toContain("Use the stated defaults");
+    expect(brief).toContain("Use each item's default without asking");
     expect(brief).toContain("## Sandbox");
     expect(brief).toContain("build (skipped: sandbox)");
     expect(brief).toMatchSnapshot();

@@ -113,6 +113,29 @@ function isFree(root: string, rel: string): boolean {
   return true;
 }
 
+/**
+ * Whether `root/rel` can be (re)written as a regular file: no path component is a symlink, every
+ * component before the last is a directory (or missing), and the last is missing or a regular
+ * file. Used for the incoming dir, where replacing an earlier run's parked file is expected.
+ */
+function isReplaceable(root: string, rel: string): boolean {
+  const parts = rel.split("/");
+  let path = root;
+  for (const [i, part] of parts.entries()) {
+    path = join(path, part);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(path);
+    } catch {
+      return true;
+    }
+    if (st.isSymbolicLink()) return false;
+    if (i === parts.length - 1) return st.isFile();
+    if (!st.isDirectory()) return false;
+  }
+  return true;
+}
+
 /** realpath of `path`, or of its nearest existing ancestor when it doesn't exist yet. */
 function realExisting(path: string): string {
   try {
@@ -123,27 +146,30 @@ function realExisting(path: string): string {
   }
 }
 
-/** Write `root/rel`, refusing to land anywhere outside `projectDir` (e.g. via a symlink). */
-function writeOut(
-  projectDir: string,
-  root: string,
-  rel: string,
-  data: Buffer | string,
-  mode?: number,
-): void {
-  const path = join(root, rel);
-  const realProject = realpathSync(projectDir);
-  const check = () => {
-    if (isInside(realProject, realExisting(dirname(path)))) return;
-    throw new OpenScaffoldError(
-      "render_outside_project",
-      `refusing to write ${path}: it resolves outside ${projectDir}`,
-      "A directory on the way is a symlink to somewhere else. Remove it or rerun in a clean directory.",
-    );
-  };
-  check();
+/**
+ * Throw unless writing `path` would land inside `projectDir`: its directory must resolve inside
+ * the project and `path` itself must not be a symlink. `projectDir` need not exist yet.
+ */
+export function assertInsideProject(projectDir: string, path: string): void {
+  let link = false;
+  try {
+    link = lstatSync(path).isSymbolicLink();
+  } catch {
+    // Doesn't exist yet: only its directory matters.
+  }
+  if (!link && isInside(realExisting(projectDir), realExisting(dirname(path)))) return;
+  throw new OpenScaffoldError(
+    "render_outside_project",
+    `refusing to write ${path}: it resolves outside ${projectDir}`,
+    "The file, or a directory on the way, is a symlink to somewhere else. Remove it or rerun in a clean directory.",
+  );
+}
+
+/** Write `path`, refusing to land anywhere outside `projectDir` (e.g. via a symlink). */
+function writeOut(projectDir: string, path: string, data: Buffer | string, mode?: number): void {
+  assertInsideProject(projectDir, path);
   mkdirSync(dirname(path), { recursive: true });
-  check();
+  assertInsideProject(projectDir, path);
   writeFileSync(path, data);
   if (mode !== undefined) chmodSync(path, mode);
 }
@@ -165,20 +191,27 @@ interface Rendered {
   mode?: number;
 }
 
+export interface RenderPlan extends RenderResult {
+  /** Write every planned file. Every check already passed when the plan was made. */
+  apply: () => void;
+}
+
 /**
- * Write a plan's files into `projectDir`. Non-template files are copied byte for byte with
- * their permission bits (hooks stay executable); `.tmpl` sources are rendered; merge groups are
- * rendered, parsed as JSON, and deep-merged in plan order. Existing files are never overwritten,
- * and nothing is written through a symlink: a destination with a symlink anywhere on its path
- * counts as existing. Everything is rendered in memory first, so a template or JSON error
- * leaves the project untouched.
+ * Work out what writing a plan's files into `projectDir` would do, without touching the disk.
+ * Non-template files are copied byte for byte with their permission bits (hooks stay
+ * executable); `.tmpl` sources are rendered; merge groups are rendered, parsed as JSON, and
+ * deep-merged in plan order. Existing files are never overwritten, and nothing is written
+ * through a symlink: a destination with a symlink anywhere on its path counts as existing. With
+ * `incomingDir`, an existing destination's version is parked there instead, replacing a file an
+ * earlier run parked at the same path. Rendering and every path check happen here, so a
+ * template, JSON, or path error leaves the project untouched. `projectDir` need not exist yet.
  */
-export function renderFiles(
+export function planRender(
   files: FileOp[],
   projectDir: string,
   vars: Record<string, string>,
   opts: RenderOptions = {},
-): RenderResult {
+): RenderPlan {
   const groups = new Map<string, FileOp[]>();
   for (const op of files) groups.set(op.dest, [...(groups.get(op.dest) ?? []), op]);
 
@@ -214,23 +247,43 @@ export function renderFiles(
 
   const written: string[] = [];
   const skipped: string[] = [];
+  const writes: { path: string; data: Buffer | string; mode?: number }[] = [];
   for (const { dest, data, mode } of rendered) {
-    if (!isFree(projectDir, dest)) {
-      skipped.push(dest);
-      if (opts.incomingDir) {
-        if (!isFree(opts.incomingDir, dest)) {
-          throw new OpenScaffoldError(
-            "render_incoming_blocked",
-            `can't write ${join(opts.incomingDir, dest)}: something is already there or a directory on the way is a symlink`,
-            `Remove ${opts.incomingDir} and rerun.`,
-          );
-        }
-        writeOut(projectDir, opts.incomingDir, dest, data, mode);
-      }
+    if (isFree(projectDir, dest)) {
+      written.push(dest);
+      writes.push({ path: join(projectDir, dest), data, mode });
       continue;
     }
-    writeOut(projectDir, projectDir, dest, data, mode);
-    written.push(dest);
+    skipped.push(dest);
+    if (!opts.incomingDir) continue;
+    if (!isReplaceable(opts.incomingDir, dest)) {
+      throw new OpenScaffoldError(
+        "render_incoming_blocked",
+        `can't write ${join(opts.incomingDir, dest)}: it isn't a regular file or a directory on the way is a symlink`,
+        `Remove ${opts.incomingDir} and rerun.`,
+      );
+    }
+    writes.push({ path: join(opts.incomingDir, dest), data, mode });
   }
+  for (const w of writes) assertInsideProject(projectDir, w.path);
+
+  return {
+    written,
+    skipped,
+    apply: () => {
+      for (const w of writes) writeOut(projectDir, w.path, w.data, w.mode);
+    },
+  };
+}
+
+/** Plan (see planRender) and write a plan's files into `projectDir`. */
+export function renderFiles(
+  files: FileOp[],
+  projectDir: string,
+  vars: Record<string, string>,
+  opts: RenderOptions = {},
+): RenderResult {
+  const { written, skipped, apply } = planRender(files, projectDir, vars, opts);
+  apply();
   return { written, skipped };
 }

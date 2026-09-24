@@ -121,7 +121,7 @@ npx openscaffold new python-react scratch --sandbox
 npx openscaffold add agent-ops ci-github
 ```
 
-It never overwrites a file. When a file already exists, openscaffold's version goes to `.openscaffold/incoming/` instead, and the brief lists it as "merge needed" so the agent can reconcile the two. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
+It never overwrites a file. When a file already exists, openscaffold's version goes to `.openscaffold/incoming/` instead, and the brief lists it as "merge needed" so the agent can reconcile the two. Files still unreconciled in `incoming/` on the next `add` are kept and listed again; a path the new run parks replaces its older copy. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
 
 ## Verify
 

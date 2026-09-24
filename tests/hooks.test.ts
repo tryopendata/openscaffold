@@ -188,6 +188,20 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       'bash -c "rm -rf /"',
       "sh -c 'cd /tmp; rm -rf ~'",
       'echo "DROP TABLE users;" | psql',
+      "sudo -u root rm -rf /",
+      "env rm -rf /",
+      "exec rm -rf ~",
+      "eval rm -rf /",
+      "timeout 5 rm -rf /",
+      "nice rm -rf ~",
+      "nice -n 10 rm -rf ~",
+      "rm -rf ./",
+      "rm -rf ../",
+      "rm -rf ../*",
+      'rm -rf "$PWD"',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell ${PWD}
+      "rm -rf ${PWD}/",
+      "bash -c 'rm -rf /'",
     ])("denies %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);
@@ -212,6 +226,12 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       'git commit -m "drop table migration"',
       "rm -rf /tmp/build-cache",
       "rm -rf ~/scratch/old",
+      "echo 'a;rm -rf ~'",
+      'rm -rf "a b" && echo "x | rm -rf ~"',
+      "git rm -r --cached src/old",
+      "npm run rm-cache",
+      "grep -r rm .",
+      "rm -rf ../sibling-build",
     ])("allows %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);
@@ -307,6 +327,23 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       expect(r.stdout).toBe("");
     });
 
+    it.skipIf(!hasShellcheck)("follows sourced files next to the script it lints", () => {
+      const dir = mkdtempSync(join(tmpdir(), "hooks-source-"));
+      pathDirs.push(dir);
+      writeFileSync(join(dir, "lib.sh"), "#!/usr/bin/env bash\ngreet() { echo hi; }\n");
+      writeFileSync(
+        join(dir, "main.sh"),
+        '#!/usr/bin/env bash\n# shellcheck source=lib.sh\n. "$(dirname "$0")/lib.sh"\ngreet\n',
+      );
+      const r = runHook(
+        "lint-on-write.sh",
+        { tool_name: "Write", tool_input: { file_path: join(dir, "main.sh") } },
+        { env: { CLAUDE_PROJECT_DIR: dir } },
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+    });
+
     it.skipIf(!hasShellcheck)("reports linter findings as PostToolUse additionalContext", () => {
       const r = runHook(
         "lint-on-write.sh",
@@ -327,8 +364,9 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
     it.skipIf(!hasShellcheck)(
       "relativizes paths when the project dir and file path differ by a symlink",
       () => {
-        const link = join(mkdtempSync(join(tmpdir(), "hooks-link-")), "proj");
-        pathDirs.push(link);
+        const linkParent = mkdtempSync(join(tmpdir(), "hooks-link-"));
+        pathDirs.push(linkParent);
+        const link = join(linkParent, "proj");
         symlinkSync(realpathSync(project), link);
         for (const [dir, file] of [
           [link, join(realpathSync(project), "bad.sh")],
@@ -402,6 +440,8 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       expect(start()).not.toMatch(/create a branch/);
       git(repo, "commit", "-q", "--allow-empty", "-m", "init");
       expect(start()).toMatch(/create a branch/);
+      git(repo, "config", "openscaffold.allowMain", "true");
+      expect(start()).not.toMatch(/create a branch/);
     });
   });
 

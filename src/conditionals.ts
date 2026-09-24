@@ -19,7 +19,7 @@ const ALLOWED_VALUES: Partial<Record<ConditionKey, readonly string[]>> = {
 };
 
 export interface ConditionalBlock {
-  /** 1-based line numbers of the `when` and `end` markers. */
+  /** 1-based line numbers of the `when` and `end` markers, relative to the body. */
   start: number;
   end: number;
   conditions: Partial<Record<ConditionKey, string[]>>;
@@ -83,13 +83,17 @@ function parseCondition(
   return conditions;
 }
 
-/** Find conditional blocks and report malformed markers. Exported for `validate`. */
-export function parseConditionals(body: string): ConditionalParse {
+/**
+ * Find conditional blocks and report malformed markers. Exported for `validate`. Block line
+ * numbers are relative to `body`; `lineOffset` (the number of file lines before the body) only
+ * shifts the line numbers in error messages so they point into the file.
+ */
+export function parseConditionals(body: string, lineOffset = 0): ConditionalParse {
   const blocks: ConditionalBlock[] = [];
   const errors: string[] = [];
   let open: { start: number; conditions: ConditionalBlock["conditions"] } | undefined;
   body.split("\n").forEach((text, i) => {
-    const line = i + 1;
+    const line = i + 1 + lineOffset;
     const m = MARKER.exec(text);
     if (!m) return;
     const directive = m[1] ?? "";
@@ -107,7 +111,11 @@ export function parseConditionals(body: string): ConditionalParse {
         errors.push(`line ${line}: openscaffold:end without a matching openscaffold:when`);
         return;
       }
-      blocks.push({ start: open.start, end: line, conditions: open.conditions });
+      blocks.push({
+        start: open.start - lineOffset,
+        end: line - lineOffset,
+        conditions: open.conditions,
+      });
       open = undefined;
     } else {
       errors.push(

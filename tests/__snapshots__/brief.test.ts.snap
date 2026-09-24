@@ -81,6 +81,7 @@ Turn this directory into a working development environment for the stack describ
 ## Ground rules
 
 - Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.
+- The project root is already a git repository with no commits. Skip generators' own git setup, and commit once verify passes.
 - openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.
   - \`.github/workflows/ci.yml\`
   - \`README.md\`
@@ -194,6 +195,7 @@ Turn this directory into a working development environment for the stack describ
 ## Ground rules
 
 - Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.
+- The project root is already a git repository with no commits. Skip generators' own git setup, and commit once verify passes.
 - openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.
   - \`.github/workflows/ci.yml\`
   - \`README.md\`
@@ -206,7 +208,7 @@ Turn this directory into a working development environment for the stack describ
 
 ## Decisions
 
-Use the stated defaults, even where an item says to ask. Don't ask the user; list the choices you made in your final summary.
+Use each item's default without asking the user, and list the choices you made in your final summary.
 
 - Project name (default: the directory name)
 

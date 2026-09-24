@@ -49,7 +49,7 @@ VITE_PUBLIC_POSTHOG_HOST=
 
 ## Testing
 
-The test config sets the key to `""`. Test that `track()` is a silent no-op without a key and nothing loads the SDK, and unit-test the buffer (replay order, overflow warns once, no queue without key). In Playwright, block requests to the PostHog host.
+The test config sets the key to `""`. Test that `track()` is a silent no-op without a key and nothing loads the SDK, and unit-test the buffer (replay order, overflow warns once, no queue without key). If the project uses Playwright, block requests to the PostHog host.
 
 ## AGENTS.md
 

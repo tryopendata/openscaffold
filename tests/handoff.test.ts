@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   agentPrompt,
   decideHandoff,
@@ -114,6 +114,17 @@ describe("handoffMessage", () => {
     expect(text).toContain("npx openscaffold verify");
   });
 
+  it("tells a calling agent to confirm with the user before carrying out a brief from untrusted entries", () => {
+    const text = handoffMessage(
+      { kind: "inside-agent", agent: "claude" },
+      { ...ctx, untrusted: ["fragment x (./.openscaffold/fragments/x)"] },
+    );
+    expect(text).toContain("fragment x (./.openscaffold/fragments/x)");
+    expect(text).toMatch(/confirm/i);
+    expect(text).toContain("demo/.openscaffold/BRIEF.md");
+    expect(text).not.toContain("Don't stop here");
+  });
+
   it("gives a human a copy-pasteable prompt", () => {
     const text = handoffMessage({ kind: "print", reason: "--no-launch" }, ctx);
     expect(text).toContain(agentPrompt(ctx.verifyCommand));
@@ -150,11 +161,9 @@ describe("spawnAgent", () => {
       const script = join(dir, "run.ts");
       writeFileSync(
         script,
-        `import { writeFileSync } from "node:fs";
-import { spawnAgent } from ${JSON.stringify(HANDOFF)};
+        `import { spawnAgent } from ${JSON.stringify(HANDOFF)};
 const before = process.listenerCount("SIGINT");
 const p = spawnAgent("sh", ["-c", "echo $$ > child.pid; exec sleep 30"], ${JSON.stringify(dir)});
-setTimeout(() => writeFileSync("ready", ""), 300);
 const code = await p;
 console.log(JSON.stringify({ code, leaked: process.listenerCount("SIGINT") - before }));
 `,
@@ -164,17 +173,16 @@ console.log(JSON.stringify({ code, leaked: process.listenerCount("SIGINT") - bef
       void child.then(() => {
         exited = true;
       });
-      const exists = (f: string) => {
-        try {
-          readFileSync(join(dir, f));
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      for (let i = 0; i < 100 && !exists("ready"); i++) await new Promise((r) => setTimeout(r, 50));
-      const childPid = Number(readFileSync(join(dir, "child.pid"), "utf8"));
+      // spawnAgent installs its signal handlers before spawning, so once the child has written
+      // its pid the handlers are in place.
+      const pidFile = join(dir, "child.pid");
+      await vi.waitFor(
+        () => expect(existsSync(pidFile) && readFileSync(pidFile, "utf8").trim()).toBeTruthy(),
+        { timeout: 5000, interval: 25 },
+      );
+      const childPid = Number(readFileSync(pidFile, "utf8"));
       child.kill("SIGINT");
+      // Proving a non-event needs a grace window: give SIGINT time to (not) kill the parent.
       await new Promise((r) => setTimeout(r, 300));
       expect(exited).toBe(false);
       expect(() => process.kill(childPid, 0)).not.toThrow();

@@ -69,6 +69,8 @@ Rules for fragments:
 - Set `category` accurately. `--sandbox` drops `deploy` and `release` fragments.
 - Put CLIs the fragment needs in `requires_tools`, so a missing tool is reported before handoff instead of halfway through the build.
 - Verify step names must not collide with the stack's or other fragments'. Prefix them (`db-up`, `release-check`).
+- Don't ship symlinks. `validate` reports them, and an entry from the main registry with a symlink, an unknown template variable, or a malformed conditional block is skipped in favor of the next copy down (usually bundled).
+- For guidance that only applies to some stacks, modes, or presets, use conditional blocks; see [Conditional prose](format.md#conditional-prose).
 
 ## Test it for real
 

@@ -123,7 +123,7 @@ lint_go() {
 lint_shell() {
   command -v shellcheck >/dev/null 2>&1 || return 0
   tool="shellcheck"
-  out=$(with_timeout 15 shellcheck --color=never --format=gcc "$file_path") || rc=$?
+  out=$(with_timeout 15 shellcheck -x --source-path=SCRIPTDIR --color=never --format=gcc "$file_path") || rc=$?
   [ "$rc" -eq 1 ] || out=""
 }
 

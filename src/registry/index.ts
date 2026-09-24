@@ -178,10 +178,12 @@ export function buildRegistry(
   for (const kind of ["stack", "fragment"] as const) {
     for (const entry of winners[kind].values()) {
       if (entry.origin !== "project") continue;
-      const shadowed = entry.shadows.find((o) => o === "registry" || o === "bundled");
+      const shadowed = (["registry", "bundled", "user"] as const).find((o) =>
+        entry.shadows.includes(o),
+      );
       if (!shadowed) continue;
-      // A cloned repo can ship ./.openscaffold overrides of well-known ids, so they don't get
-      // the trust (e.g. agent auto-launch) the reviewed copy would.
+      // A cloned repo can ship ./.openscaffold overrides of well-known ids (or of the user's own
+      // entries), so they don't get the trust (e.g. agent auto-launch) the shadowed copy would.
       entry.trusted = false;
       warnings.push(
         `${displayPath(entry.dir, entry.origin, cwd)} shadows the ${shadowed} ${entry.id}; a cloned repo can ship this, so check it's yours. It's treated as untrusted, so no agent is auto-launched`,

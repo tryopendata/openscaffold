@@ -17,7 +17,7 @@ openscaffold holds version-less recipes for dev stacks. You pick a stack, the CL
    - `--yes` to accept stated defaults without asking the user.
 4. Scaffold. Run `npx openscaffold new <stack> <dir> [options]`. The CLI detects that you're an agent and tells you to read the brief instead of launching anything.
 5. Build. Read `<dir>/.openscaffold/BRIEF.md` and do what it says. It is the full task: stack guidance, fragment guidance, decisions to confirm, and the definition of done.
-6. Verify. Run the verify command given in the brief (usually `npx openscaffold verify` from the project root) and fix failures until it passes. Don't edit or weaken verify steps to make them pass.
+6. Verify. Run the exact verify command printed in the brief, from the project root, and fix failures until it passes. Don't edit or weaken verify steps to make them pass.
 7. Report to the user: what was built, the commands to start the dev server and run tests, and anything left for them to do (API keys, remote hosts).
 
 ## Existing repos

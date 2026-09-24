@@ -8,8 +8,8 @@ tags: [python, typescript, react, web, api, fullstack, monorepo]
 deps:
   backend: [fastapi, uvicorn, pydantic, pydantic-settings, structlog]
   backend-dev: [ruff, mypy, pytest, pytest-asyncio, pytest-xdist, pytest-cov, pytest-randomly, httpx]
-  frontend: [react, react-dom, react-router, "@tanstack/react-query", zod, tailwindcss, "@tailwindcss/vite", class-variance-authority, clsx, tailwind-merge, lucide-react]
-  frontend-dev: ["@react-router/dev", vite, "@vitejs/plugin-react", typescript, eslint, "@eslint/js", typescript-eslint, eslint-plugin-react-hooks, eslint-plugin-jsx-a11y, globals, prettier, vitest, "@vitest/coverage-v8", happy-dom, "@testing-library/react", "@testing-library/jest-dom", "@testing-library/user-event", msw, orval, "@playwright/test"]
+  frontend: [react, react-dom, react-router, "@tanstack/react-query", zod, tailwindcss, "@tailwindcss/vite", class-variance-authority, lucide-react]
+  frontend-dev: ["@react-router/dev", vite, "@vitejs/plugin-react", typescript, eslint, "@eslint/js", typescript-eslint, eslint-plugin-react-hooks, eslint-plugin-jsx-a11y, globals, prettier, vitest, "@vitest/coverage-v8", happy-dom, "@testing-library/react", "@testing-library/jest-dom", "@testing-library/user-event", msw, "@faker-js/faker", orval, "@playwright/test"]
 tools: [uv, bun, make, git]
 decisions:
   - "Python version: the newest stable CPython that FastAPI, ruff, and mypy support (default). Setup writes it to .python-version and requires-python."
@@ -29,6 +29,7 @@ verify:
   - { name: lint, run: make lint }
   - { name: typecheck, run: make typecheck }
   - { name: test, run: make test }
+  - { name: api-contract, run: make check-api }
   - { name: build, run: make build, tags: [prod] }
   - name: api
     phase: serve
@@ -77,7 +78,7 @@ Every generator runs in its subdirectory, never the populated root.
 1. **Backend.** `uv init` non-interactively in `backend/` as an application, with the Python version from Decisions. Make `.python-version` and `requires-python` match that version (uv may default to an older interpreter it finds). `uv add` the backend deps, `uv add --dev` the backend-dev deps, delete uv's stub `main.py`/`hello.py`, create `app/`.
 2. **Backend code** per Conventions: `GET /health` returns `{"status": "ok"}` with no dependencies. Add `scripts/dump_openapi.py`. Configure ruff, mypy, pytest, coverage in `pyproject.toml`; get `uv run pytest` green.
 3. **Frontend.** The official React Router generator, non-interactively, into `frontend/`, without git or install. `bun install`; set `packageManager` in `frontend/package.json` to the installed bun version (CI's bun setup reads it). SSR off. Add Tailwind through its Vite plugin if the template didn't.
-4. **shadcn/ui.** Run its init non-interactively in `frontend/`; it infers aliases from tsconfig. Check that `components.json` points at `~/components`, `~/components/ui`, `~/lib`, `~/lib/utils`, `~/hooks` (`~` is `app/`) and fix only what's wrong, rather than writing it by hand. Add `button` to prove the pipeline.
+4. **shadcn/ui.** Run its init non-interactively in `frontend/` (check `--help`: current versions also need a style/preset and base-library flag to skip every prompt), and let it add its own utility deps; it infers aliases from tsconfig. Check that `components.json` points at `~/components`, `~/components/ui`, `~/lib`, `~/lib/utils`, `~/hooks` (`~` is `app/`) and fix only what's wrong, rather than writing it by hand. Add `button` to prove the pipeline.
 5. **Data layer.** One `QueryClient` in `app/lib/query-client.ts`, provided in `root.tsx`; the Vite dev proxy.
 6. **Typed client.** `make generate-api`. The home route calls `/health` through a generated hook and renders it: one real UI-to-API round trip.
 7. **Frontend tooling** per Tool configuration, a component test for the home route (against MSW), one Playwright smoke spec. Fill the README's `openscaffold:fill` markers.
@@ -113,7 +114,7 @@ Every generator runs in its subdirectory, never the populated root.
 - **TypeScript**: strict; `~/*` -> `app/*`; include React Router's generated route types.
 - **Vitest**: own `vitest.config.ts` with `@vitejs/plugin-react` (not the React Router plugin), `happy-dom`, `globals`, `setupFiles: ["./tests/setup.ts"]`, include `app/**/*.test.{ts,tsx}`, exclude `tests/e2e/**`, tsconfig's aliases, and vendor keys (`VITE_PUBLIC_POSTHOG_KEY`) set to `""` in `test.env`. v8 coverage (text + lcov) over `app/**` minus generated code and route entries; thresholds 80 lines/statements, 70 branches, 75 functions.
 - **tests/setup.ts**: jest-dom matchers, MSW server with `onUnhandledRequest: "error"` (reset per test), Testing Library cleanup.
-- **orval**: from `./openapi.json`, (1) TanStack Query hooks + zod schemas in `app/api/generated/` using `app/lib/api.ts` as the custom mutator, with the fetch client's `forceSuccessResponse` on (the fetcher throws on non-2xx, so hooks return success bodies only); (2) MSW handlers in `tests/mocks/generated/`. Its post-generation Prettier hook respects `.prettierignore`, which is why generated dirs stay out of it. Pick one casing strategy (pydantic aliases or orval transform) for snake_case APIs.
+- **orval**: from `./openapi.json`, (1) TanStack Query hooks + zod schemas in `app/api/generated/` using `app/lib/api.ts` as the custom mutator, with the fetch client configured so hooks return the success body itself rather than a `{data, status, headers}` wrapper (the fetcher throws on non-2xx; check orval's docs for the current option names, more than one may be involved); (2) MSW handlers in `tests/mocks/generated/`. Its post-generation Prettier hook respects `.prettierignore`, which is why generated dirs stay out of it. MSW handlers use `@faker-js/faker`. Default to camelCase on the wire via a shared pydantic base model with camelCase aliases (serialize by alias, accept both on input); keep Python code snake_case.
 - **Playwright**: chromium, CI retries and `forbidOnly`, HTML report with `open: "never"`; `webServer` runs `make dev-api` and `make dev-web`, reusing servers outside CI only.
 
 ## Testing
@@ -125,7 +126,7 @@ Every generator runs in its subdirectory, never the populated root.
 
 ## Commands
 
-The shipped root Makefile (`make help`) has `backend-*` and `frontend-*` sub-targets (install, lint, format, typecheck, test, coverage; plus `frontend-build`) that the combined targets call: install, lint, format, typecheck, test, coverage, build, dev, dev-api, dev-web, generate-api, check-api (regenerate and fail on diff), e2e, clean. `frontend/package.json` scripts back the frontend half: `dev`, `build`, `typecheck` (`react-router typegen && tsc`), `lint`, `format`, `test` (`vitest run`), `test:e2e`, `generate:api`. Mirror both in AGENTS.md.
+The shipped root Makefile (`make help`) has `backend-*` and `frontend-*` sub-targets (install, lint, format, typecheck, test, coverage; plus `frontend-build`) that the combined targets call: install, lint, format, typecheck, test, coverage, build, dev, dev-api, dev-web, generate-api, check-api (fail when `openapi.json` no longer matches the backend; a verify step), e2e, clean. `frontend/package.json` scripts back the frontend half: `dev`, `build`, `typecheck` (`react-router typegen && tsc`), `lint`, `format`, `test` (`vitest run`), `test:e2e`, `generate:api`. Mirror both in AGENTS.md.
 
 ## Gotchas
 

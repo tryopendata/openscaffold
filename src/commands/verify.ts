@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { printJson, println, warn } from "../output.js";
 import { collect } from "../scaffold.js";
-import { runVerify, type StepResult, type VerifyEvent } from "../verify.js";
+import { runVerify, type StepResult, signalExitCode, type VerifyEvent } from "../verify.js";
 
 interface VerifyFlags {
   dir: string;
@@ -72,8 +72,7 @@ export function register(program: Command): void {
         only: flags.only,
         onEvent: flags.json ? undefined : printEvent,
       });
-      // 130 = 128 + SIGINT, the shell convention for an interrupted command.
-      if (!report.ok) process.exitCode = report.interrupted ? 130 : 1;
+      if (!report.ok) process.exitCode = report.signal ? signalExitCode(report.signal) : 1;
       if (flags.json) {
         printJson(report);
         return;

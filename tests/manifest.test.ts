@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,7 +54,7 @@ function manifest(): Manifest {
 }
 
 describe("hashVerify", () => {
-  it("applies defaults and ignores key order and extra props", () => {
+  it("is the same for steps that differ only by defaults, key order, or extra props", () => {
     const minimal = [{ name: "lint", run: "make lint" }] as VerifyStep[];
     const full = [{ tags: [], phase: "check", run: "make lint", name: "lint", owner: "x" }];
     expect(hashVerify(minimal)).toBe(hashVerify(full as VerifyStep[]));
@@ -61,7 +69,7 @@ describe("hashVerify", () => {
 });
 
 describe("readManifest / writeManifest", () => {
-  it("round-trips with a header comment", () => {
+  it("writes a commented manifest that reads back unchanged", () => {
     const dir = tmp();
     writeManifest(dir, manifest());
     const text = readFileSync(join(dir, MANIFEST_PATH), "utf8");
@@ -70,21 +78,42 @@ describe("readManifest / writeManifest", () => {
     expect(readManifest(dir)).toEqual(manifest());
   });
 
-  it("returns undefined when missing", () => {
+  it("refuses to write through a symlinked .openscaffold that leads outside the project", () => {
+    const root = tmp();
+    const project = join(root, "p");
+    const outside = join(root, "outside");
+    mkdirSync(project);
+    mkdirSync(outside);
+    symlinkSync(outside, join(project, ".openscaffold"));
+    expect(() => writeManifest(project, manifest())).toThrow(
+      expect.objectContaining({ code: "render_outside_project" }),
+    );
+    expect(existsSync(join(outside, "manifest.yaml"))).toBe(false);
+  });
+
+  it("returns undefined when the project has no manifest", () => {
     expect(readManifest(tmp())).toBeUndefined();
   });
 
-  it("throws OpenScaffoldError with a hint when invalid", () => {
+  it("throws a hinted error naming the field when the manifest doesn't match the schema", () => {
     const dir = tmp();
     mkdirSync(join(dir, ".openscaffold"));
     writeFileSync(join(dir, MANIFEST_PATH), "openscaffold: 1\nverify: nope\n");
-    expect(() => readManifest(dir)).toThrow(OpenScaffoldError);
-    try {
-      readManifest(dir);
-    } catch (err) {
-      expect((err as OpenScaffoldError).hint).toBeTruthy();
-      expect((err as Error).message).toContain("verify");
-    }
+    const err = (() => {
+      try {
+        readManifest(dir);
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(OpenScaffoldError);
+    expect((err as OpenScaffoldError).hint).toBeTruthy();
+    expect((err as Error).message).toContain("verify");
+  });
+
+  it("throws when the manifest isn't valid YAML", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, ".openscaffold"));
     writeFileSync(join(dir, MANIFEST_PATH), "a: [unclosed\n");
     expect(() => readManifest(dir)).toThrow(/not valid YAML/);
   });

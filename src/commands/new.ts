@@ -9,8 +9,9 @@ import type { HandoffDecision } from "../handoff.js";
 import { hashVerify, MANIFEST_PATH, writeManifest } from "../manifest.js";
 import { printJson, println, warn } from "../output.js";
 import { loadRegistry } from "../registry/index.js";
-import { renderFiles } from "../render.js";
+import { planRender } from "../render.js";
 import {
+  assertMetadataInside,
   type CommonRunOptions,
   collect,
   detected,
@@ -58,16 +59,28 @@ export interface NewResult {
 
 const IGNORED_IN_TARGET = new Set([".git", ".DS_Store"]);
 
-/** Files under `dir` (relative, "/"-separated), skipping IGNORED_IN_TARGET names. */
-function listTarget(dir: string, prefix = ""): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (IGNORED_IN_TARGET.has(entry.name)) continue;
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...listTarget(join(dir, entry.name), rel));
-    else out.push(rel);
-  }
-  return out;
+/**
+ * Whether everything under `dir` (skipping IGNORED_IN_TARGET names) is a file in `planned` or a
+ * directory on the way to one. Stops at the first thing that isn't and never descends into a
+ * directory the plan doesn't use, so a busy directory like ~ is rejected without walking it.
+ */
+function onlyPlannedFiles(dir: string, planned: Set<string>): boolean {
+  const plannedDirs = new Set(
+    [...planned].flatMap((f) =>
+      f
+        .split("/")
+        .slice(0, -1)
+        .map((_, i, parts) => parts.slice(0, i + 1).join("/")),
+    ),
+  );
+  const walk = (d: string, pre: string): boolean =>
+    readdirSync(d, { withFileTypes: true }).every((e) => {
+      if (IGNORED_IN_TARGET.has(e.name)) return true;
+      const rel = pre ? `${pre}/${e.name}` : e.name;
+      if (!e.isDirectory()) return planned.has(rel);
+      return plannedDirs.has(rel) && walk(join(d, e.name), rel);
+    });
+  return walk(dir, "");
 }
 
 /**
@@ -86,7 +99,7 @@ function assertEmptyTarget(dir: string, plan: ComposedPlan): void {
   const planned = new Set(plan.files.map((f) => f.dest));
   const halfFinished =
     !existsSync(join(dir, MANIFEST_PATH)) &&
-    (extra.includes(".openscaffold") || listTarget(dir).every((f) => planned.has(f)));
+    (extra.includes(".openscaffold") || onlyPlannedFiles(dir, planned));
   throw new OpenScaffoldError(
     "target_not_empty",
     message,
@@ -141,8 +154,28 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     now: opts.now,
   });
 
+  // Everything that can fail (rendering, path checks, the brief's conditionals) runs before the
+  // first write, so a bad entry leaves no half-finished project behind.
+  const render = planRender(plan.files, dir, vars);
+  const { written, skipped } = render;
+  const verify = stripOwner(plan.verify);
+  const cli = opts.cli ?? cliInvocation();
+  const verifyCommand = `${cli} verify`;
+  const briefText = buildBrief({
+    mode: "new",
+    vars,
+    plan,
+    written,
+    mergeNeeded: [],
+    yes: Boolean(opts.yes) || sandbox,
+    verify,
+    env: plan.env,
+    cli,
+  });
+  assertMetadataInside(dir);
+
   mkdirSync(dir, { recursive: true });
-  const { written, skipped } = renderFiles(plan.files, dir, vars);
+  render.apply();
 
   const gitWarning = ensureGitRepo(dir);
   if (gitWarning) {
@@ -150,7 +183,6 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     if (!opts.json) warnLine(gitWarning);
   }
 
-  const verify = stripOwner(plan.verify);
   const now = (opts.now ?? new Date()).toISOString();
   writeManifest(dir, {
     openscaffold: VERSION,
@@ -166,23 +198,7 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     created: now,
     updated: now,
   });
-
-  const cli = opts.cli ?? cliInvocation();
-  const verifyCommand = `${cli} verify`;
-  const brief = writeBrief(
-    dir,
-    buildBrief({
-      mode: "new",
-      vars,
-      plan,
-      written,
-      mergeNeeded: [],
-      yes: Boolean(opts.yes) || sandbox,
-      verify,
-      env: plan.env,
-      cli,
-    }),
-  );
+  const brief = writeBrief(dir, briefText);
 
   if (!opts.json) {
     const frags = plan.fragments.map((f) => f.id);

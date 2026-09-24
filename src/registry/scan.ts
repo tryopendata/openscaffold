@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ZodError } from "zod";
+import { parseConditionals } from "../conditionals.js";
 import { listEntryFiles } from "../entry-files.js";
 import { OpenScaffoldError } from "../errors.js";
 import { parseFrontmatter } from "../frontmatter.js";
@@ -115,6 +116,13 @@ function checkEntryFiles(dir: string): string | undefined {
   return undefined;
 }
 
+/** Why an entry body's conditional markers can't be applied, or undefined. */
+function checkConditionals(entry: Entry): string | undefined {
+  const { errors } = parseConditionals(entry.body);
+  if (errors.length === 0) return undefined;
+  return `${join(entry.dir, KIND_FILE[entry.kind])} has malformed conditional markers: ${errors.join("; ")}`;
+}
+
 /** List entry directories of one kind under a registry root (sorted, hidden dirs skipped). */
 export function entryDirs(root: string, kind: EntryKind): string[] {
   const base = join(root, KIND_DIR[kind]);
@@ -136,8 +144,10 @@ export function scanRoot(root: string, origin: Origin): ScanResult {
         continue;
       }
       // Registry entries are fetched over the network and may target a newer CLI: check their
-      // files now so a bad one is skipped in favor of the bundled copy instead of failing later.
-      const fileProblem = origin === "registry" ? checkEntryFiles(dir) : undefined;
+      // files and conditional markers now so a bad one is skipped in favor of the bundled copy
+      // instead of failing later.
+      const fileProblem =
+        origin === "registry" ? (checkEntryFiles(dir) ?? checkConditionals(r.entry)) : undefined;
       if (fileProblem) {
         result.problems.push({
           kind,

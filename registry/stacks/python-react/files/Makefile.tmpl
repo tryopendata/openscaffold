@@ -92,8 +92,10 @@ generate-api: ## Dump OpenAPI from the backend and regenerate the typed client
 	cd backend && uv run python scripts/dump_openapi.py ../frontend/openapi.json
 	cd frontend && bun run generate:api
 
-check-api: generate-api ## Fail if the committed spec or generated client is stale
-	git diff --exit-code -- frontend/openapi.json frontend/app/api/generated frontend/tests/mocks/generated
+check-api: ## Fail if frontend/openapi.json no longer matches the backend (run generate-api)
+	@tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+	(cd backend && uv run python scripts/dump_openapi.py "$$tmp") || exit 1; \
+	cmp -s "$$tmp" frontend/openapi.json || { echo "frontend/openapi.json is stale: run make generate-api"; exit 1; }
 
 e2e: ## Playwright end-to-end tests (installs the browser on first run)
 	cd frontend && bunx playwright install chromium && bun run test:e2e

@@ -8,6 +8,7 @@ import { OpenScaffoldError } from "../errors.js";
 import { printJson, println } from "../output.js";
 import {
   buildRegistry,
+  closeMatches,
   type EntryKind,
   entryDirs,
   isDir,
@@ -169,9 +170,40 @@ export function validatePath(path: string, opts: { bundledDir?: string } = {}): 
 
   // 4. Body conditionals, then files: symlinks, templates, merge JSON, version-sensitive names.
   const withSymlinks = new Set<string>();
+  const stackIds = registry.list("stack").map((s) => s.id);
+  const fragmentIdsAll = registry.list("fragment").map((f) => f.id);
+  const declaredTags = new Set(registry.list("stack").flatMap((s) => (s as StackEntry).meta.tags));
   for (const entry of valid) {
-    for (const message of parseConditionals(entry.body).errors) {
-      error(entryFile(entry), `conditional block: ${message}`);
+    const file = entryFile(entry);
+    const offset = bodyLineOffset(file, entry.body);
+    const parsed = parseConditionals(entry.body, offset);
+    for (const message of parsed.errors) error(file, `conditional block: ${message}`);
+    if (parsed.errors.length === 0) {
+      for (const block of parsed.blocks) {
+        const at = `conditional block: line ${block.start + offset}:`;
+        const unknownId = (key: "stack" | "with", kind: string, ids: string[]) => {
+          for (const v of block.conditions[key] ?? []) {
+            if (ids.includes(v)) continue;
+            const close = closeMatches(v, ids);
+            const hint = close.length
+              ? ` (did you mean ${close.map((c) => `"${c}"`).join(", ")}?)`
+              : "";
+            error(
+              file,
+              `${at} ${key}=${v} is not a known ${kind}; the block would never be kept${hint}`,
+            );
+          }
+        };
+        unknownId("stack", "stack", stackIds);
+        unknownId("with", "fragment", fragmentIdsAll);
+        for (const tag of block.conditions.tag ?? []) {
+          if (declaredTags.has(tag)) continue;
+          warning(
+            file,
+            `${at} tag=${tag} isn't declared by any stack in the registry, so the block is only kept for stacks that add it`,
+          );
+        }
+      }
     }
     const symlinks = entrySymlinks(entry.dir);
     for (const link of symlinks) {
@@ -251,6 +283,13 @@ export function validatePath(path: string, opts: { bundledDir?: string } = {}): 
     errors,
     warnings,
   };
+}
+
+/** File lines before the (trimmed) body, so body-relative line numbers can point into the file. */
+function bodyLineOffset(file: string, body: string): number {
+  const source = readFileSync(file, "utf8");
+  const at = source.lastIndexOf(body);
+  return at < 0 ? 0 : source.slice(0, at).split("\n").length - 1;
 }
 
 function entryFile(entry: Entry): string {

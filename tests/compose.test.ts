@@ -100,6 +100,18 @@ describe("fragment selection", () => {
     expect(() => run({ with: ["ci"], existing: ["conflicts-ci"] })).toThrow(/conflicts/);
   });
 
+  it("errors when the same fragment is in both --with and --without", () => {
+    expect(() => run({ stackId: "web", with: ["ci"], without: ["ci"] })).toThrow(
+      '"ci" is in both --with and --without',
+    );
+  });
+
+  it("warns about, but ignores, an unknown --without id", () => {
+    const plan = run({ stackId: "web", without: ["nope"] });
+    expect(ids(plan)).toEqual(["agent-ops", "ci", "docker-build", "fly"]);
+    expect(plan.warnings).toEqual(['--without nope: no fragment named "nope", ignoring it']);
+  });
+
   it("errors on an unknown fragment with a list hint", () => {
     expect(() => run({ stackId: "web", with: ["postgress"] })).toThrow(
       /no fragment named "postgress"/,
@@ -153,6 +165,14 @@ describe("add mode", () => {
     expect(plan.verify.map((s) => s.name)).toEqual(["db-up"]);
     expect(plan.decisions).toEqual([]);
     expect(plan.missingTools).toEqual([{ owner: "postgres", tool: "docker" }]);
+  });
+
+  it("suggests not adding a fragment whose tool is missing, since add has no --without", () => {
+    const plan = run({ stackId: "web", mode: "add", with: ["postgres"] }, { hasTool: () => false });
+    expect(plan.warnings).toContain(
+      "postgres needs docker, which isn't on PATH; install it, or don't add postgres",
+    );
+    expect(plan.warnings.join("\n")).not.toContain("--without");
   });
 
   it("doesn't treat a path the stack owns as an ownership collision", () => {

@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -105,6 +106,19 @@ describe("precedence", () => {
     expect(reg.fragment("y").shadows).toEqual(["registry"]);
     expect(reg.fragment("y").trusted).toBe(false);
     expect(reg.warnings.join("\n")).toContain("shadows the registry y");
+  });
+
+  it("warns and distrusts a project entry that shadows only a user entry", async () => {
+    fragment(join(home, ".openscaffold"), "mine", "", { name: "user mine" });
+    fragment(join(cwd, ".openscaffold"), "mine", "", { name: "project mine" });
+    const reg = await load();
+    const mine = reg.fragment("mine");
+    expect(mine.meta.name).toBe("project mine");
+    expect(mine.shadows).toEqual(["user"]);
+    expect(mine.trusted).toBe(false);
+    expect(reg.warnings).toContainEqual(
+      expect.stringContaining("./.openscaffold/fragments/mine shadows the user mine"),
+    );
   });
 
   it("lists winners, stacks first", async () => {
@@ -269,7 +283,7 @@ describe("remote registry cache", () => {
 });
 
 describe("symlinks in entries", () => {
-  it("listEntryFiles refuses symlinks, naming the file", () => {
+  it("refuses a symlinked file inside an entry, naming it", () => {
     const dir = join(tmp, "entry");
     write(join(dir, "files", "ok.txt"), "ok");
     write(join(tmp, "secret"), "secret");
@@ -321,6 +335,24 @@ describe("registry template check", () => {
     });
     expect(reg.fragment("x").meta.name).toBe("bundled x");
     expect(reg.warnings.join("\n")).toContain("{{future_var}}");
+  });
+});
+
+describe("registry conditional check", () => {
+  it("skips registry entries with malformed conditional markers, falling back to bundled", async () => {
+    const reg = await load({
+      offline: false,
+      fetchRemote: async (_s, dest) => {
+        fragment(dest, "x", "", { name: "remote x" });
+        const file = join(dest, "fragments", "x", "FRAGMENT.md");
+        writeFileSync(
+          file,
+          `${readFileSync(file, "utf8")}\n<!-- openscaffold:when agent=claude -->\nhi\n<!-- openscaffold:end -->\n`,
+        );
+      },
+    });
+    expect(reg.fragment("x").meta.name).toBe("bundled x");
+    expect(reg.warnings.join("\n")).toContain('unknown condition key "agent"');
   });
 });
 

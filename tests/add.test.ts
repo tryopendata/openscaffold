@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runAdd } from "../src/commands/add.js";
@@ -126,6 +133,64 @@ describe("runAdd", () => {
     expect(result.warnings.join("\n")).toMatch(/incoming.*old\.json/);
     expect(result.mergeNeeded).toEqual([".gitignore", "old.json"]);
     expect(readFileSync(result.brief, "utf8")).toContain("`old.json` (incoming:");
+  });
+
+  it("parks the same path again when a later add wants it too", async () => {
+    mkdirSync(join(repo, ".claude"));
+    writeFileSync(join(repo, ".claude/settings.json"), '{"mine":true}');
+    const first = await runAdd({ ...sb.opts, dir: "repo", fragments: ["agent-ops"] });
+    expect(first.mergeNeeded).toEqual([".claude/settings.json"]);
+
+    const second = await runAdd({ ...sb.opts, dir: "repo", fragments: ["extra"] });
+    expect(second.mergeNeeded).toEqual([".claude/settings.json"]);
+    const parked = JSON.parse(
+      readFileSync(join(repo, ".openscaffold/incoming/.claude/settings.json"), "utf8"),
+    );
+    expect(parked.permissions.allow).toEqual(["Bash(repo *)"]);
+    expect(readFileSync(join(repo, ".claude/settings.json"), "utf8")).toBe('{"mine":true}');
+    expect(readManifest(repo)?.fragments).toEqual(["agent-ops", "extra"]);
+    expect(readFileSync(second.brief, "utf8")).toContain("Extra tooling");
+  });
+
+  it("writes nothing when a fragment's conditional markers are malformed", async () => {
+    const bad = join(sb.home, ".openscaffold/fragments/bad");
+    mkdirSync(bad, { recursive: true });
+    writeFileSync(
+      join(bad, "FRAGMENT.md"),
+      "---\nschema_version: 1\nid: bad\nkind: fragment\nname: Bad\ndescription: t\ncategory: tooling\n---\n\n<!-- openscaffold:when agent=claude -->\nhi\n<!-- openscaffold:end -->\n",
+    );
+    mkdirSync(join(bad, "files"));
+    writeFileSync(join(bad, "files", "bad.txt"), "x");
+    await expect(runAdd({ ...sb.opts, dir: "repo", fragments: ["bad"] })).rejects.toMatchObject({
+      code: "bad_conditional",
+    });
+    expect(existsSync(join(repo, "bad.txt"))).toBe(false);
+    expect(existsSync(join(repo, ".openscaffold"))).toBe(false);
+  });
+
+  it("refuses to write the manifest or brief through a symlinked .openscaffold", async () => {
+    const outside = join(sb.cwd, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(repo, ".openscaffold"));
+    await expect(runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] })).rejects.toMatchObject({
+      code: "render_outside_project",
+    });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(repo, "README.md"))).toBe(false);
+  });
+
+  it("refuses a missing target dir, an empty fragment list, and unknown fragment ids", async () => {
+    await expect(
+      runAdd({ ...sb.opts, dir: "nope", fragments: ["agent-ops"] }),
+    ).rejects.toMatchObject({ code: "target_missing" });
+    await expect(runAdd({ ...sb.opts, dir: "repo", fragments: [] })).rejects.toMatchObject({
+      code: "bad_option",
+      message: "no fragments given",
+    });
+    await expect(
+      runAdd({ ...sb.opts, dir: "repo", fragments: ["agent-opz"] }),
+    ).rejects.toMatchObject({ hint: expect.stringContaining('Did you mean "agent-ops"') });
+    expect(existsSync(join(repo, ".openscaffold"))).toBe(false);
   });
 
   it("warns about edited verify steps and keeps the edit detectable", async () => {

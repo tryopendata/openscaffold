@@ -1,7 +1,7 @@
 /** Pieces shared by `new` and `add`. */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { OpenScaffoldError } from "./errors.js";
 import {
   type DetectedAgent,
@@ -12,8 +12,9 @@ import {
   type SpawnAgent,
   spawnAgent,
 } from "./handoff.js";
-import { BRIEF_PATH } from "./manifest.js";
+import { BRIEF_PATH, MANIFEST_PATH } from "./manifest.js";
 import { println } from "./output.js";
+import { assertInsideProject } from "./render.js";
 import { AGENTS, type AgentId } from "./schema/index.js";
 import type { ComposedPlan, OwnedVerifyStep } from "./types.js";
 
@@ -114,15 +115,29 @@ export function ensureGitRepo(dir: string): string | undefined {
   }
 }
 
+/** Write `.openscaffold/BRIEF.md`, refusing to write through a symlink that leads outside `dir`. */
 export function writeBrief(dir: string, text: string): string {
   const path = join(dir, BRIEF_PATH);
-  mkdirSync(join(dir, ".openscaffold"), { recursive: true });
+  assertInsideProject(dir, path);
+  mkdirSync(dirname(path), { recursive: true });
+  assertInsideProject(dir, path);
   writeFileSync(path, text);
   return path;
 }
 
-export function allTrusted(plan: ComposedPlan): boolean {
-  return [...(plan.stack ? [plan.stack] : []), ...plan.fragments].every((e) => e.trusted);
+/** Throw before anything is written when the manifest or brief would land outside `dir`. */
+export function assertMetadataInside(dir: string): void {
+  for (const rel of [MANIFEST_PATH, BRIEF_PATH]) assertInsideProject(dir, join(dir, rel));
+}
+
+/** Composed entries that aren't trusted, as "fragment x (./path)" with paths shown from `cwd`. */
+export function untrustedEntries(plan: ComposedPlan, cwd: string): string[] {
+  return [...(plan.stack ? [plan.stack] : []), ...plan.fragments]
+    .filter((e) => !e.trusted)
+    .map((e) => {
+      const rel = relative(cwd, e.dir);
+      return `${e.kind} ${e.id} (${rel.startsWith("..") ? e.dir : `./${rel}`})`;
+    });
 }
 
 export interface HandoffResult {
@@ -140,6 +155,7 @@ export async function runHandoff(
   const cwd = opts.cwd ?? process.cwd();
   const rel = relative(cwd, ctx.dir);
   const shownDir = rel === "" ? "." : rel.startsWith("..") ? ctx.dir : rel;
+  const untrusted = untrustedEntries(ctx.plan, cwd);
   const decision = decideHandoff({
     env: opts.env ?? process.env,
     isTTY: opts.isTTY ?? Boolean(process.stdout.isTTY),
@@ -147,7 +163,7 @@ export async function runHandoff(
     launch: opts.launch,
     preferred: opts.agent ? parseAgent(opts.agent, "--agent") : undefined,
     configAgents: ctx.configAgents,
-    trusted: allTrusted(ctx.plan),
+    trusted: untrusted.length === 0,
     verifyCommand: ctx.verifyCommand,
     hasBinary: opts.hasTool,
   });
@@ -156,6 +172,7 @@ export async function runHandoff(
     briefPath:
       decision.kind === "inside-agent" ? join(ctx.dir, BRIEF_PATH) : join(shownDir, BRIEF_PATH),
     verifyCommand: ctx.verifyCommand,
+    untrusted,
   });
   if (opts.json) return { decision, next };
   const print = opts.print ?? println;

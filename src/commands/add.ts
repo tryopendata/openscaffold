@@ -9,8 +9,9 @@ import type { HandoffDecision } from "../handoff.js";
 import { hashVerify, MANIFEST_PATH, readManifest, writeManifest } from "../manifest.js";
 import { printJson, println, warn } from "../output.js";
 import { loadRegistry } from "../registry/index.js";
-import { renderFiles } from "../render.js";
+import { planRender } from "../render.js";
 import {
+  assertMetadataInside,
   type CommonRunOptions,
   collect,
   detected,
@@ -178,7 +179,8 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
   });
   const vars = { ...inferred, ...(manifest?.vars ?? {}) };
   for (const key of Object.keys(vars)) if (!TEMPLATE_VARS.includes(key)) delete vars[key];
-  const { written, skipped } = renderFiles(plan.files, dir, vars, { incomingDir: incoming });
+  const render = planRender(plan.files, dir, vars, { incomingDir: incoming });
+  const { written, skipped } = render;
   const mergeNeeded = [...skipped, ...leftover];
 
   const now = (opts.now ?? new Date()).toISOString();
@@ -197,25 +199,27 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     created: manifest?.created ?? now,
     updated: now,
   };
-  writeManifest(dir, next);
 
   const cli = opts.cli ?? cliInvocation();
   const verifyCommand = `${cli} verify`;
-  const brief = writeBrief(
-    dir,
-    buildBrief({
-      mode: "add",
-      vars,
-      plan,
-      existingFragments: manifest?.fragments ?? [],
-      written,
-      mergeNeeded,
-      yes: Boolean(opts.yes) || next.preset === "sandbox",
-      verify,
-      env,
-      cli,
-    }),
-  );
+  // Everything that can fail (rendering, path checks, the brief's conditionals) runs before the
+  // first write, so a bad fragment leaves the project as it was.
+  const briefText = buildBrief({
+    mode: "add",
+    vars,
+    plan,
+    existingFragments: manifest?.fragments ?? [],
+    written,
+    mergeNeeded,
+    yes: Boolean(opts.yes) || next.preset === "sandbox",
+    verify,
+    env,
+    cli,
+  });
+  assertMetadataInside(dir);
+  render.apply();
+  writeManifest(dir, next);
+  const brief = writeBrief(dir, briefText);
 
   if (!opts.json) {
     print(

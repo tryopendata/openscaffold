@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execa } from "execa";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenScaffoldError } from "../src/errors.js";
 import { hashVerify, writeManifest } from "../src/manifest.js";
 import type { VerifyStep } from "../src/schema/index.js";
@@ -81,6 +81,34 @@ function alive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+// A killed process can linger briefly as a zombie until it's reaped, so poll rather than
+// checking once. The timeout is an upper bound, not a delay.
+async function expectGone(pid: number): Promise<void> {
+  await vi.waitFor(() => expect(alive(pid), `pid ${pid} still running`).toBe(false), {
+    timeout: 5000,
+    interval: 25,
+  });
+}
+
+async function expectPortFree(port: number): Promise<void> {
+  await vi.waitFor(async () => expect(await portFree(port), `port ${port} in use`).toBe(true), {
+    timeout: 5000,
+    interval: 25,
+  });
+}
+
+// Reads a pid a shell step writes with `echo $! > file`, waiting until the write lands.
+async function readPid(file: string): Promise<number> {
+  return vi.waitFor(
+    () => {
+      const pid = Number(readFileSync(file, "utf8"));
+      expect(pid).toBeGreaterThan(0);
+      return pid;
+    },
+    { timeout: 10_000, interval: 25 },
+  );
 }
 
 const byName = (r: VerifyReport, name: string) => r.steps.find((s) => s.name === name);
@@ -203,7 +231,7 @@ describe("runVerify", () => {
     );
     const r = await runVerify({ projectDir: dir, env: { ...process.env, PORT_API: String(port) } });
     expect(byName(r, "api")?.status).toBe("passed");
-    expect(await portFree(port)).toBe(true);
+    await expectPortFree(port);
   });
 
   it("kills the whole process group of a serve step, including children", async () => {
@@ -222,10 +250,9 @@ describe("runVerify", () => {
     );
     const r = await runVerify({ projectDir: dir });
     expect(byName(r, "api")?.status).toBe("passed");
-    const pid = Number(readFileSync(join(dir, "server.pid"), "utf8"));
-    expect(pid).toBeGreaterThan(0);
-    expect(alive(pid)).toBe(false);
-    expect(await portFree(port)).toBe(true);
+    const pid = await readPid(join(dir, "server.pid"));
+    await expectGone(pid);
+    await expectPortFree(port);
   });
 
   it("fails a serve step whose probe never succeeds, in bounded time", async () => {
@@ -335,12 +362,15 @@ describe("runVerify", () => {
     expect(api?.reason).toContain("foreground");
   });
 
-  it("does not hang on a check step that leaves a background process holding its output", async () => {
-    const dir = project([{ name: "leaky", run: "sleep 30 & echo started" }]);
+  it("kills a background process a check step leaves holding its output, instead of hanging", async () => {
+    const dir = project([{ name: "leaky", run: "sleep 30 & echo $! > bg.pid; echo started" }]);
     const start = Date.now();
     const r = await runVerify({ projectDir: dir });
     expect(Date.now() - start).toBeLessThan(8000);
-    expect(byName(r, "leaky")?.status).toBe("passed");
+    const leaky = byName(r, "leaky");
+    expect(leaky?.status).toBe("passed");
+    expect(leaky?.outputTail).toContain("killed processes this step left running");
+    await expectGone(await readPid(join(dir, "bg.pid")));
   });
 
   it("warns when the verify steps no longer match the stored hash", async () => {
@@ -408,14 +438,31 @@ describe("verify command", () => {
       { name: "down", run: "touch torn-down", phase: "teardown" },
     ]);
     const child = execa("bun", [CLI, "verify", "--dir", dir], { reject: false });
-    for (let i = 0; i < 100 && !existsSync(join(dir, "sleep.pid")); i++) {
-      await new Promise((r) => setTimeout(r, 50));
+    try {
+      // The step is running once it has recorded its background pid.
+      const pid = await readPid(join(dir, "sleep.pid"));
+      child.kill("SIGINT");
+      const res = await child;
+      expect(res.exitCode).toBe(130);
+      expect(existsSync(join(dir, "torn-down"))).toBe(true);
+      await expectGone(pid);
+    } finally {
+      child.kill("SIGKILL");
     }
-    child.kill("SIGINT");
-    const res = await child;
-    expect(res.exitCode).toBe(130);
-    expect(existsSync(join(dir, "torn-down"))).toBe(true);
-    const pid = Number(readFileSync(join(dir, "sleep.pid"), "utf8"));
-    expect(alive(pid)).toBe(false);
+  });
+
+  it("on SIGTERM exits 143 and reports the signal in --json", async () => {
+    const dir = project([{ name: "hang", run: "sleep 30 & echo $! > sleep.pid; wait" }]);
+    const child = execa("bun", [CLI, "verify", "--dir", dir, "--json"], { reject: false });
+    try {
+      const pid = await readPid(join(dir, "sleep.pid"));
+      child.kill("SIGTERM");
+      const res = await child;
+      expect(res.exitCode).toBe(143);
+      expect(JSON.parse(res.stdout)).toMatchObject({ interrupted: true, signal: "SIGTERM" });
+      await expectGone(pid);
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 });

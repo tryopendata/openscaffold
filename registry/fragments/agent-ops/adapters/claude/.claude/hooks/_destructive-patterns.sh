@@ -46,16 +46,21 @@ is_destructive() {
   # --- Filesystem ------------------------------------------------------------
   # rm rules look at one simple command at a time, split on ; && || | & and
   # newlines, so `rm -f out.txt && cd ..` or `rm build.log; ls /` don't read the
-  # next command's argument as rm's target. rm must be the segment's command
-  # word (after sudo, env assignments, or a shell keyword such as then/do).
-  local rm_start='^[[:space:]]*((\$\(|[({!`])[[:space:]]*|(then|do|else|sudo|command|nohup|time)[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(/bin/|/usr/bin/|\\)?rm[[:space:]]'
+  # next command's argument as rm's target. Separators inside quotes don't
+  # split (echo 'a;rm -rf ~' is one echo); sh -c payloads were checked above.
+  # rm must be the segment's command word, possibly after env assignments, a
+  # shell keyword (then/do), or a wrapper such as sudo/env/timeout/nice with
+  # its options and numeric arguments (sudo -u root, timeout 5, nice -n 10).
+  local rm_wrap='(then|do|else|sudo|doas|env|exec|eval|command|builtin|nohup|time|nice|ionice|timeout|stdbuf)'
+  local rm_arg='(-[^[:space:]]*([[:space:]]+[^-[:space:]][^[:space:]]*)?|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)'
+  local rm_start="^[[:space:]]*((\\\$\\(|[({!\`])[[:space:]]*|${rm_wrap}([[:space:]]+${rm_arg})*[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[\"']?(/bin/|/usr/bin/|\\\\)?rm[[:space:]]"
   local seg
   while IFS= read -r seg; do
     grep -qE -e "$rm_start" <<<"$seg" || continue
-    # rm against /, ~, ., .., $HOME or their /* forms, quoted or not. Matching
-    # on the target rather than the flag cluster closes the split-flag bypass
-    # (rm -r -f /).
-    if grep -qE -e "[[:space:]=][\"']?(/|/\*|~/?|~/\*|\\\$HOME/?|\\\$HOME/\*|\\\$\{HOME\}/?|\.\.?|\./\*)[\"']?${end}" <<<"$seg"; then
+    # rm against /, ~, ., .., $HOME, $PWD or their / and /* forms, quoted or
+    # not. Matching on the target rather than the flag cluster closes the
+    # split-flag bypass (rm -r -f /).
+    if grep -qE -e "[[:space:]=][\"']?(/\*?|(~|\\\$HOME|\\\$\{HOME\}|\\\$PWD|\\\$\{PWD\}|\.\.?)(/\*?)?)[\"']?${end}" <<<"$seg"; then
       hit "rm targeting the filesystem root, home, or the working directory." \
         "Name the exact paths to remove. Ask the user first."
       return 0
@@ -64,7 +69,18 @@ is_destructive() {
       hit "rm with a bare wildcard." "Be explicit about which files to remove. Ask the user first."
       return 0
     fi
-  done < <(awk '{ gsub(/\|\||&&|;|\||&/, "\n"); print }' <<<"$command")
+  done < <(awk '
+    {
+      out = ""
+      for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (q != "") { if (c == q) q = "" }
+        else if (c == "\047" || c == "\"") q = c
+        else if (c == ";" || c == "&" || c == "|") c = "\n"
+        out = out c
+      }
+      print out
+    }' <<<"$command")
 
   if m "xargs[[:space:]].*rm[[:space:]]+-[a-zA-Z]*[rRf]"; then
     hit "Recursive or forced rm fed by xargs." "Review the pipeline. Ask the user first."
