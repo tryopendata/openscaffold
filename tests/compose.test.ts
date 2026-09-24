@@ -120,6 +120,45 @@ describe("sandbox", () => {
     expect(ids(plan)).toContain("fly");
     expect(plan.warnings.join("\n")).toContain("fly is a deploy fragment");
   });
+
+  it("keeps a deploy fragment another fragment requires, and says why", () => {
+    const plan = run({ stackId: "cli", sandbox: true, with: ["needs-fly"] });
+    expect(ids(plan)).toContain("fly");
+    expect(plan.warnings.join("\n")).toContain("kept fly because needs-fly requires it");
+
+    // A default dropped for sandbox but required elsewhere isn't reported as dropped.
+    const web = run({ stackId: "web", sandbox: true, with: ["needs-fly"] });
+    expect(ids(web)).toContain("fly");
+    const w = web.warnings.join("\n");
+    expect(w).toContain("kept fly because needs-fly requires it");
+    expect(w).not.toContain("dropped fly");
+  });
+});
+
+describe("add mode", () => {
+  it("selects only the requested fragments plus requires, ignoring stack defaults", () => {
+    const plan = run({ stackId: "web", mode: "add", with: ["postgres"] });
+    expect(ids(plan)).toEqual(["postgres"]);
+    expect(plan.stack?.id).toBe("web");
+  });
+
+  it("still uses the stack for applies_to matching", () => {
+    const plan = run({ stackId: "cli", mode: "add", with: ["web-only"] });
+    expect(plan.warnings.join("\n")).toContain("applies to typescript, not stack cli");
+  });
+
+  it("leaves the stack's files, steps, env, and tools out of the plan", () => {
+    const plan = run({ stackId: "web", mode: "add", with: ["postgres"] }, { hasTool: () => false });
+    expect(plan.files.map((f) => f.owner)).not.toContain("web");
+    expect(plan.verify.map((s) => s.name)).toEqual(["db-up"]);
+    expect(plan.decisions).toEqual([]);
+    expect(plan.missingTools).toEqual([{ owner: "postgres", tool: "docker" }]);
+  });
+
+  it("doesn't treat a path the stack owns as an ownership collision", () => {
+    const plan = run({ stackId: "web", mode: "add", with: ["owns-gitignore"] });
+    expect(plan.files.map((f) => `${f.owner}:${f.dest}`)).toEqual(["owns-gitignore:.gitignore"]);
+  });
 });
 
 describe("files", () => {
@@ -192,6 +231,19 @@ describe("verify, env, decisions, tools", () => {
     expect(plan.decisions).toEqual([
       "Project name (default: the directory name)",
       "agent-ops: Which hooks to enable (default all)",
+    ]);
+  });
+
+  it("warns once per missing tool, naming every owner", () => {
+    const plan = run({ stackId: "web", with: ["postgres", "needs-fly"] }, { hasTool: () => false });
+    expect(plan.missingTools).toEqual([
+      { owner: "web", tool: "bun" },
+      { owner: "needs-fly", tool: "docker" },
+      { owner: "postgres", tool: "docker" },
+    ]);
+    const docker = plan.warnings.filter((w) => w.includes("docker"));
+    expect(docker).toEqual([
+      "needs-fly, postgres need docker, which isn't on PATH; install it or rerun with --without needs-fly --without postgres",
     ]);
   });
 

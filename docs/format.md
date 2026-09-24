@@ -78,6 +78,26 @@ Fragments use whatever headings fit, usually `## What to add`, `## Tool configur
 
 Write intent, not version-specific instructions. "Configure Tailwind through its Vite plugin" ages better than "edit tailwind.config.js". If a statement would be wrong after the next major release of a tool, rephrase it or move it into Gotchas with the condition that makes it true.
 
+### Conditional prose
+
+Prose that only applies to some projects (a fragment's notes for one stack, instructions that only matter for `add`) goes in a conditional block, so briefs for other projects don't carry it:
+
+```markdown
+<!-- openscaffold:when stack=go-cli,python-react -->
+Wire the client into the Makefile's `test` target.
+<!-- openscaffold:end -->
+```
+
+| Key | Matches |
+|---|---|
+| `stack` | The stack id. |
+| `tag` | Any of the stack's tags. |
+| `mode` | `new` or `add`. |
+| `preset` | `default` or `sandbox`. |
+| `with` | A fragment id present in the composed project (for `add`, including fragments applied earlier). |
+
+Commas mean OR within a key (`stack=go-cli,python-react`). Several keys on one marker must all match (`tag=web preset=sandbox`). Blocks don't nest. When the brief is written, a block whose condition doesn't match is removed entirely, and a matching block loses only its two marker lines. Each marker must be on its own line. `validate` reports unknown keys, bad `mode`/`preset` values, nesting, and unclosed blocks. `show` prints the body unfiltered.
+
 ## files/ and adapters/
 
 Only version-agnostic content goes in `files/`: an AGENTS.md skeleton, agent hooks and settings, lefthook config, `.editorconfig`, `.gitignore`, `.env.example`, docs skeletons, Makefile targets that call tools by name. Tool configs whose schema changes between releases (`.golangci.yml`, `vitest.config.ts`, `tsconfig.json`, `pyproject.toml`, `astro.config.mjs`, CI workflows, Dockerfiles) are described in prose instead. `validate` warns when it sees a known version-sensitive filename in `files/`.
@@ -96,7 +116,7 @@ Each output path has exactly one owner. If two entries write the same path, comp
 
 Shared prose files (AGENTS.md sections, README, Makefile targets) are never merged by the CLI. The owning fragment ships the skeleton; other fragments describe their additions in prose and the agent writes them.
 
-On `openscaffold add` against an existing repo, files that already exist are never overwritten. They're listed in the brief as "merge needed" so the agent can reconcile them.
+On `openscaffold add` against an existing repo, files that already exist are never overwritten. openscaffold's version of each one is written to `.openscaffold/incoming/<path>`, and the brief lists them as "merge needed" so the agent can reconcile the two and then delete `incoming/`.
 
 ## Verify
 
@@ -127,4 +147,4 @@ Serve steps run in their own process group, and the whole group is killed after 
 
 ## Trust
 
-Bundled entries, the main registry (reviewed by PR), and your own `~/.openscaffold` and `./.openscaffold` are trusted. A `./.openscaffold` entry that shadows a bundled or registry id produces a warning, because a cloned repo can ship one. `new` and `add` never run commands from an entry. `verify` runs the commands in the project's `manifest.yaml` and prints each one before running it.
+Bundled entries, the main registry (reviewed by PR), and your own `~/.openscaffold` and `./.openscaffold` are trusted. The exception is a `./.openscaffold` entry that shadows a bundled or registry id: a cloned repo can ship one, so it produces a warning and is marked untrusted (`trusted: false` in `list --json` and `show --json`). When any composed entry is untrusted, `new` and `add` never auto-launch an agent; they print the brief path and the instruction instead. `new` and `add` never run commands from an entry. `verify` runs the commands in the project's `manifest.yaml` and prints each one before running it.

@@ -1,7 +1,4 @@
 {
-  "_readme": [
-    "ce-plugin: registers the claude-essentials marketplace and enables its ce plugin (skills for testing, debugging, error handling, writing; review agents). Takes effect once each person trusts the folder in Claude Code."
-  ],
   "extraKnownMarketplaces": {
     "claude-essentials": {
       "source": {

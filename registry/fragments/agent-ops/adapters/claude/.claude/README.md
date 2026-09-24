@@ -17,7 +17,7 @@ Project instructions live in `AGENTS.md` at the repo root, which every coding ag
 | `block-destructive.sh` | PreToolUse `Bash` | Denies commands that destroy work or data: `rm` of `/`, `~` or `.`, `git reset --hard`, `git clean -f`, force push (`--force-with-lease` is allowed), `DROP TABLE`, `docker compose down -v`, publishing a release. The agent sees the reason and asks you instead. |
 | `detect-secrets.sh` | PreToolUse `Edit\|Write` | Denies writes containing credential-shaped strings (cloud and SaaS keys, private keys, tokens, connection strings with passwords). |
 | `lint-on-write.sh` | PostToolUse `Edit\|Write` | Runs the project's linter on the file just written (ruff, biome or eslint, golangci-lint or gofmt, shellcheck) and hands diagnostics back to the agent. |
-| `format-changed.sh` | Stop | Formats changed files with the formatters the project has configured (ruff, biome or prettier, gofmt). |
+| `format-changed.sh` | Stop | Formats changed files with the formatters the project has configured (ruff, biome or prettier, gofmt). "Changed" means everything git sees as modified, staged, or untracked, so it also formats files you are editing yourself while the agent works. |
 | `_destructive-patterns.sh` | (sourced) | The pattern list behind `block-destructive.sh`. Reuse it from any hook that approves or rewrites Bash commands. |
 | `_lib.sh` | (sourced) | Shared helpers: jq check, project root, `find_up`, a portable `with_timeout`. |
 
@@ -43,4 +43,13 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git reset --hard"}}' | bash .
 
 ## Settings
 
-`settings.json` is shared and committed. Some keys (permission allow rules, plugin marketplaces) only take effect after each person trusts the folder in Claude Code; deny rules apply right away. Put anything personal in `settings.local.json`.
+`settings.json` is shared and committed. Some keys (permission allow rules, plugin marketplaces) only take effect after each person trusts the folder in Claude Code; deny rules apply right away. Put anything personal (extra permissions, env, personal MCP servers) in `settings.local.json`.
+
+`permissions.deny` repeats the worst destructive shapes (`rm -rf /`, `rm -rf ~`, `rm -rf .`, force push, `git reset --hard`) so they stay blocked on a machine without jq, where `block-destructive.sh` can't run. They are exact rules on purpose: a wildcard such as `Bash(rm -rf /*)` would match every `rm -rf /some/abs/path`, and a deny rule can't be overridden by an allow rule.
+
+Depending on which openscaffold fragments are installed, `settings.json` may also:
+
+- register the `claude-essentials` marketplace and enable its `ce` plugin (skills for testing, debugging, error handling, and writing; review agents), or
+- register the `rr` marketplace and enable the `rr` plugin (the rr skill and `/rr:setup`), pre-approving rr's read-only commands (`rr doctor`, `rr status`, `rr tasks`). `rr run`/`exec` and named tasks still prompt, because they run commands on remote hosts.
+
+Both take effect once each person trusts the folder in Claude Code.

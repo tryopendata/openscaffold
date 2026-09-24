@@ -1,4 +1,12 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -32,6 +40,26 @@ describe("validate", () => {
     ]);
     const withBundled = validate(extra, join(FIXTURES, "registry-good"));
     expect(withBundled.ok).toBe(true);
+  });
+
+  it("reports malformed conditional blocks in entry bodies", () => {
+    const root = mkdtempSync(join(tmpdir(), "os-validate-cond-"));
+    try {
+      cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+      const file = join(root, "fragments", "extra", "FRAGMENT.md");
+      writeFileSync(
+        file,
+        `${readFileSync(file, "utf8")}\n<!-- openscaffold:when color=blue -->\nhidden\n`,
+      );
+      const report = validate(root);
+      const messages = report.errors
+        .filter((e) => e.file === "fragments/extra/FRAGMENT.md")
+        .map((e) => e.message);
+      expect(report.ok).toBe(false);
+      expect(messages.some((m) => m.startsWith("conditional block:"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   describe("bad registry", () => {
@@ -109,6 +137,35 @@ describe("validate", () => {
         message: 'composing demo with clash: verify step "test" is defined by both demo and clash',
       },
     ]);
+  });
+
+  it("reports symlinks in files/ as errors", () => {
+    const root = join(emptyBundled, "with-symlink");
+    cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+    symlinkSync("/etc/hosts", join(root, "fragments", "base", "files", "hosts"));
+    symlinkSync("..", join(root, "fragments", "base", "files", "loop"));
+    const report = validate(root);
+    expect(report.ok).toBe(false);
+    const files = report.errors.map((e) => e.file);
+    expect(files).toContain("fragments/base/files/hosts");
+    expect(files).toContain("fragments/base/files/loop");
+    expect(report.errors.find((e) => e.file === "fragments/base/files/hosts")?.message).toMatch(
+      /symlink/,
+    );
+  });
+
+  it("accepts mergeable JSON templates with placeholders outside quotes", () => {
+    const root = join(emptyBundled, "unquoted");
+    cpSync(join(FIXTURES, "registry-good"), root, { recursive: true });
+    const settings = join(root, "fragments", "base", "adapters", "claude", ".claude");
+    rmSync(settings, { recursive: true, force: true });
+    mkdirSync(settings, { recursive: true });
+    writeFileSync(
+      join(settings, "settings.json.tmpl"),
+      '{"since": {{year}}, "name": "{{project_name}}"}',
+    );
+    const report = validate(root);
+    expect(report.errors).toEqual([]);
   });
 
   it("rejects a path that isn't a registry or entry", () => {

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { printJson, println, warn } from "../output.js";
+import { collect } from "../scaffold.js";
 import { runVerify, type StepResult, type VerifyEvent } from "../verify.js";
 
 interface VerifyFlags {
@@ -51,9 +52,17 @@ export function register(program: Command): void {
       "Run the project's verify steps from .openscaffold/manifest.yaml (runs shell commands; each is printed first)",
     )
     .option("--dir <path>", "project directory", ".")
-    .option("--skip-tag <tag...>", "skip steps with these tags")
+    .option(
+      "--skip-tag <tags>",
+      "skip steps with these tags (comma-separated, repeatable)",
+      collect,
+    )
     .option("--all", "include steps the sandbox preset skips (tagged prod)")
-    .option("--only <name...>", "run only these check/serve steps (setup and teardown still run)")
+    .option(
+      "--only <names>",
+      "run only these check/serve steps (comma-separated, repeatable; setup and teardown still run)",
+      collect,
+    )
     .option("--json", "print the report as JSON")
     .action(async (flags: VerifyFlags) => {
       const report = await runVerify({
@@ -63,7 +72,8 @@ export function register(program: Command): void {
         only: flags.only,
         onEvent: flags.json ? undefined : printEvent,
       });
-      if (!report.ok) process.exitCode = 1;
+      // 130 = 128 + SIGINT, the shell convention for an interrupted command.
+      if (!report.ok) process.exitCode = report.interrupted ? 130 : 1;
       if (flags.json) {
         printJson(report);
         return;

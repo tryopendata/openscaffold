@@ -29,6 +29,11 @@ describe("inferProjectName", () => {
     writeFileSync(join(repo, "package.json"), '{"name":"@acme/js-widget"}');
     expect(inferProjectName(repo)).toBe("js-widget");
   });
+
+  it("drops a Go major-version suffix from the module path", () => {
+    writeFileSync(join(repo, "go.mod"), "module github.com/acme/widget/v2\n");
+    expect(inferProjectName(repo)).toBe("widget");
+  });
 });
 
 describe("runAdd", () => {
@@ -84,5 +89,53 @@ describe("runAdd", () => {
     const brief = readFileSync(result.brief, "utf8");
     expect(brief).toContain("## Merge needed");
     expect(brief).toContain("`.gitignore` (incoming: `.openscaffold/incoming/.gitignore`)");
+  });
+
+  it("doesn't re-apply stack defaults the user excluded", async () => {
+    await runNew({ ...sb.opts, stack: "app", dir: "proj", without: ["deploy"] });
+    const result = await runAdd({ ...sb.opts, dir: "proj", fragments: ["extra"] });
+    expect(result.added).toEqual(["extra"]);
+    expect(readManifest(join(sb.cwd, "proj"))?.fragments).toEqual(["agent-ops", "extra"]);
+  });
+
+  it("parks a file the stack already wrote instead of failing on ownership", async () => {
+    await runNew({ ...sb.opts, stack: "app", dir: "proj", sandbox: true });
+    const result = await runAdd({ ...sb.opts, dir: "proj", fragments: ["lonely"] });
+    expect(result.written).toEqual([".gitignore"]);
+    expect(result.mergeNeeded).toEqual(["README.md"]);
+    expect(readFileSync(join(sb.cwd, "proj/.openscaffold/incoming/README.md"), "utf8")).toBe(
+      "# proj readme\n",
+    );
+  });
+
+  it("uses the config preset when there's no manifest", async () => {
+    mkdirSync(join(sb.home, ".openscaffold"), { recursive: true });
+    writeFileSync(join(sb.home, ".openscaffold", "config.yaml"), "preset: sandbox\n");
+    const result = await runAdd({ ...sb.opts, dir: "repo", fragments: ["deploy"] });
+    expect(result.warnings.join("\n")).toContain("deploy is a deploy fragment");
+    expect(readManifest(repo)?.preset).toBe("sandbox");
+  });
+
+  it("keeps unreconciled incoming files from an earlier run and flags them", async () => {
+    mkdirSync(join(repo, ".openscaffold/incoming"), { recursive: true });
+    writeFileSync(join(repo, ".openscaffold/incoming/old.json"), "{}");
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    const result = await runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] });
+    expect(readFileSync(join(repo, ".openscaffold/incoming/old.json"), "utf8")).toBe("{}");
+    expect(readFileSync(join(repo, ".openscaffold/incoming/.gitignore"), "utf8")).toBe("dist/\n");
+    expect(result.warnings.join("\n")).toMatch(/incoming.*old\.json/);
+    expect(result.mergeNeeded).toEqual([".gitignore", "old.json"]);
+    expect(readFileSync(result.brief, "utf8")).toContain("`old.json` (incoming:");
+  });
+
+  it("warns about edited verify steps and keeps the edit detectable", async () => {
+    const created = await runNew({ ...sb.opts, stack: "app", dir: "proj", sandbox: true });
+    const path = join(created.dir, ".openscaffold/manifest.yaml");
+    writeFileSync(path, readFileSync(path, "utf8").replace("run: bun test", 'run: "true"'));
+    const result = await runAdd({ ...sb.opts, dir: "proj", fragments: ["extra"] });
+    expect(result.warnings.join("\n")).toContain("were edited since openscaffold generated them");
+    const after = readManifest(created.dir);
+    expect(after?.verify.map((s) => s.name)).toContain("extra-check");
+    expect(after?.verify_hash).not.toBe(hashVerify(after?.verify ?? []));
   });
 });

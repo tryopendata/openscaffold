@@ -1,18 +1,22 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import type { Command } from "commander";
-import { compose, listEntryFiles } from "../compose.js";
+import { compose } from "../compose.js";
+import { parseConditionals } from "../conditionals.js";
+import { entrySymlinks, listEntryFiles } from "../entry-files.js";
 import { OpenScaffoldError } from "../errors.js";
 import { printJson, println } from "../output.js";
 import {
   buildRegistry,
   type EntryKind,
   entryDirs,
+  isDir,
   KIND_FILE,
   Registry,
   readEntry,
   type ScanProblem,
 } from "../registry/index.js";
+import { TEMPLATE_TOKEN, unknownTemplateVars } from "../render.js";
 import { AGENTS, TEMPLATE_VARS } from "../schema/index.js";
 import type { Entry, FragmentEntry, StackEntry } from "../types.js";
 import { BUNDLED_REGISTRY } from "../version.js";
@@ -59,20 +63,22 @@ export function isVersionSensitive(dest: string): boolean {
   return VERSION_SENSITIVE.some((re) => re.test(name));
 }
 
-const TEMPLATE_TOKEN = /\{\{\s*([^}]*?)\s*\}\}/g;
+/**
+ * Stand-in values for rendering templates before the merge JSON check, shaped like real values
+ * (so `{{year}}` outside quotes is still valid JSON).
+ */
+const SAMPLE_VARS: Record<string, string> = {
+  project_name: "example",
+  project_slug: "example",
+  package_scope: "example",
+  author: "example",
+  year: "2026",
+};
 
 interface Target {
   /** Registry root containing the entries (for single-entry validation, the entry dirs' grandparent). */
   entries: { dir: string; kind: EntryKind }[];
   label: string;
-}
-
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function resolveTarget(path: string): Target {
@@ -161,19 +167,28 @@ export function validatePath(path: string, opts: { bundledDir?: string } = {}): 
     checkRefs(f, "conflicts", f.meta.conflicts);
   }
 
-  // 4. Files: templates, merge JSON, version-sensitive names.
+  // 4. Body conditionals, then files: symlinks, templates, merge JSON, version-sensitive names.
+  const withSymlinks = new Set<string>();
   for (const entry of valid) {
+    for (const message of parseConditionals(entry.body).errors) {
+      error(entryFile(entry), `conditional block: ${message}`);
+    }
+    const symlinks = entrySymlinks(entry.dir);
+    for (const link of symlinks) {
+      error(link, "is a symlink; entries can't ship symlinks, use a regular file or directory");
+    }
+    if (symlinks.length) {
+      withSymlinks.add(entry.id);
+      continue;
+    }
     const files = listEntryFiles(entry.dir, AGENTS);
     for (const f of files) {
       if (f.template) {
-        const text = readFileSync(f.src, "utf8");
-        for (const [, name] of text.matchAll(TEMPLATE_TOKEN)) {
-          if (!TEMPLATE_VARS.includes(name ?? "")) {
-            error(
-              f.src,
-              `unknown template variable {{${name}}}; available: ${TEMPLATE_VARS.join(", ")}`,
-            );
-          }
+        for (const name of unknownTemplateVars(readFileSync(f.src, "utf8"))) {
+          error(
+            f.src,
+            `unknown template variable {{${name}}}; available: ${TEMPLATE_VARS.join(", ")}`,
+          );
         }
       }
       if (isVersionSensitive(f.dest)) {
@@ -190,7 +205,9 @@ export function validatePath(path: string, opts: { bundledDir?: string } = {}): 
       }
       for (const f of contributions) {
         let text = readFileSync(f.src, "utf8");
-        if (f.template) text = text.replace(TEMPLATE_TOKEN, "x");
+        if (f.template) {
+          text = text.replace(TEMPLATE_TOKEN, (_whole, name: string) => SAMPLE_VARS[name] ?? "x");
+        }
         try {
           JSON.parse(text);
         } catch (err) {
@@ -215,14 +232,14 @@ export function validatePath(path: string, opts: { bundledDir?: string } = {}): 
   };
   const brokenRefs = new Set(errors.map((e) => e.file));
   for (const s of stacks) {
-    if (brokenRefs.has(rel(entryFile(s)))) continue;
+    if (brokenRefs.has(rel(entryFile(s))) || withSymlinks.has(s.id)) continue;
     dryRun(entryFile(s), `composing ${s.id} with its defaults`, s.id, []);
     for (const opt of s.meta.fragments.optional) {
       dryRun(entryFile(s), `composing ${s.id} with ${opt}`, s.id, [opt]);
     }
   }
   for (const f of fragments) {
-    if (brokenRefs.has(rel(entryFile(f)))) continue;
+    if (brokenRefs.has(rel(entryFile(f))) || withSymlinks.has(f.id)) continue;
     dryRun(entryFile(f), `composing ${f.id} on its own`, undefined, [f.id]);
   }
 

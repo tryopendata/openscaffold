@@ -20,6 +20,17 @@ is_destructive() {
   local command=$1
   [ -z "$command" ] && return 1
 
+  # A shell's -c payload is a command line of its own: check it the same way.
+  # (bash -c "rm -rf /", sh -c 'cd /tmp; rm -rf ~'). The leading space lets the
+  # pattern require a non-word character before the shell name (not ssh -c).
+  local payload q
+  for q in "'" '"'; do
+    payload=$(sed -nE "s/.*[^[:alnum:]_.-](ba|z|da|k)?sh[[:space:]]+(-[[:alpha:]]+[[:space:]]+)*-[[:alpha:]]*c[[:space:]]+${q}([^${q}]*)${q}.*/\3/p" <<<" $command")
+    if [ -n "$payload" ] && [ "$payload" != "$command" ] && is_destructive "$payload"; then
+      return 0
+    fi
+  done
+
   # m <ere>: case-sensitive match. mi <ere>: case-insensitive.
   m() { grep -qE -e "$1" <<<"$command"; }
   mi() { grep -qiE -e "$1" <<<"$command"; }
@@ -33,18 +44,28 @@ is_destructive() {
   local word='(^|[;&|(`]|[[:space:]])'
 
   # --- Filesystem ------------------------------------------------------------
-  # rm against /, ~, ., .., $HOME or their /* forms. Matching on the target
-  # rather than the flag cluster closes the split-flag bypass (rm -r -f /).
-  if m "${word}rm[[:space:]]" &&
-    m "rm[[:space:]].*([[:space:]]|=)(/|/\*|~/?|~/\*|\\\$HOME/?|\\\$HOME/\*|\.\.?|\./\*)${end}"; then
-    hit "rm targeting the filesystem root, home, or the working directory." \
-      "Name the exact paths to remove. Ask the user first."
-    return 0
-  fi
-  if m "${word}rm[[:space:]](.*[[:space:]])?\*${end}"; then
-    hit "rm with a bare wildcard." "Be explicit about which files to remove. Ask the user first."
-    return 0
-  fi
+  # rm rules look at one simple command at a time, split on ; && || | & and
+  # newlines, so `rm -f out.txt && cd ..` or `rm build.log; ls /` don't read the
+  # next command's argument as rm's target. rm must be the segment's command
+  # word (after sudo, env assignments, or a shell keyword such as then/do).
+  local rm_start='^[[:space:]]*((\$\(|[({!`])[[:space:]]*|(then|do|else|sudo|command|nohup|time)[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(/bin/|/usr/bin/|\\)?rm[[:space:]]'
+  local seg
+  while IFS= read -r seg; do
+    grep -qE -e "$rm_start" <<<"$seg" || continue
+    # rm against /, ~, ., .., $HOME or their /* forms, quoted or not. Matching
+    # on the target rather than the flag cluster closes the split-flag bypass
+    # (rm -r -f /).
+    if grep -qE -e "[[:space:]=][\"']?(/|/\*|~/?|~/\*|\\\$HOME/?|\\\$HOME/\*|\\\$\{HOME\}/?|\.\.?|\./\*)[\"']?${end}" <<<"$seg"; then
+      hit "rm targeting the filesystem root, home, or the working directory." \
+        "Name the exact paths to remove. Ask the user first."
+      return 0
+    fi
+    if grep -qE -e "[[:space:]]\*${end}" <<<"$seg"; then
+      hit "rm with a bare wildcard." "Be explicit about which files to remove. Ask the user first."
+      return 0
+    fi
+  done < <(awk '{ gsub(/\|\||&&|;|\||&/, "\n"); print }' <<<"$command")
+
   if m "xargs[[:space:]].*rm[[:space:]]+-[a-zA-Z]*[rRf]"; then
     hit "Recursive or forced rm fed by xargs." "Review the pipeline. Ask the user first."
     return 0
@@ -102,11 +123,14 @@ is_destructive() {
   fi
 
   # --- Databases -------------------------------------------------------------
-  if mi "(drop[[:space:]]+(table|database|schema)|truncate[[:space:]]+(table[[:space:]]+)?[[:alnum:]_\".]+)"; then
+  # Only when a database client runs, so a commit message or an echo that
+  # mentions DROP TABLE isn't blocked.
+  local db_client="${word}(psql|pgcli|mysql|mariadb|mycli|sqlite3|litecli|sqlcmd|duckdb|clickhouse(-client)?|cockroach|snowsql)([[:space:]]|$)"
+  if m "$db_client" && mi "(drop[[:space:]]+(table|database|schema)|truncate[[:space:]]+(table[[:space:]]+)?[[:alnum:]_\".]+)"; then
     hit "DROP or TRUNCATE causes irreversible data loss." "Ask the user first."
     return 0
   fi
-  if mi "delete[[:space:]]+from[[:space:]]+[^[:space:];]+[[:space:]]*;?[[:space:]]*[\"']?[[:space:]]*$"; then
+  if m "$db_client" && mi "delete[[:space:]]+from[[:space:]]+[^[:space:];]+[[:space:]]*;?[[:space:]]*[\"']?[[:space:]]*$"; then
     hit "DELETE without a WHERE clause empties the table." "Add a WHERE clause, or ask the user first."
     return 0
   fi

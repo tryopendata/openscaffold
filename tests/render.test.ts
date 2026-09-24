@@ -1,10 +1,12 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -171,5 +173,67 @@ describe("renderFiles", () => {
       a: 1,
       b: 2,
     });
+  });
+
+  it("doesn't write through a symlinked directory in the project, reporting it as skipped", () => {
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(out, ".claude"));
+    const incoming = join(out, ".openscaffold/incoming");
+    const result = renderFiles([op(".claude/hooks/h.sh", "#!/bin/sh\n")], out, VARS, {
+      incomingDir: incoming,
+    });
+    expect(result).toEqual({ written: [], skipped: [".claude/hooks/h.sh"] });
+    expect(existsSync(join(outside, "hooks"))).toBe(false);
+    expect(readFileSync(join(incoming, ".claude/hooks/h.sh"), "utf8")).toBe("#!/bin/sh\n");
+  });
+
+  it("treats a dangling symlink at the destination as existing", () => {
+    symlinkSync(join(tmp, "nowhere.txt"), join(out, "notes.txt"));
+    const result = renderFiles([op("notes.txt", "hi")], out, VARS);
+    expect(result).toEqual({ written: [], skipped: ["notes.txt"] });
+    expect(existsSync(join(tmp, "nowhere.txt"))).toBe(false);
+  });
+
+  it("rejects destinations that are absolute or escape the project", () => {
+    for (const dest of ["../escape.txt", "a/../../escape.txt", join(tmp, "abs.txt")]) {
+      expect(() =>
+        renderFiles([op("x.txt", "x"), { ...op("y.txt", "y"), dest }], out, VARS),
+      ).toThrow(OpenScaffoldError);
+      expect(existsSync(join(out, "x.txt")), dest).toBe(false);
+    }
+    expect(existsSync(join(tmp, "escape.txt"))).toBe(false);
+  });
+
+  it("writes nothing when any file fails to render", () => {
+    expect(() =>
+      renderFiles(
+        [
+          op("first.txt", "ok"),
+          op("s.json", "{}", { owner: "one", merge: true }),
+          op("s.json", "{nope", { owner: "two", merge: true }),
+        ],
+        out,
+        VARS,
+      ),
+    ).toThrow(/isn't valid JSON/);
+    expect(existsSync(join(out, "first.txt"))).toBe(false);
+    expect(() =>
+      renderFiles([op("a.txt", "ok"), op("b.txt", "{{nope}}", { template: true })], out, VARS),
+    ).toThrow(/unknown template variable/);
+    expect(existsSync(join(out, "a.txt"))).toBe(false);
+  });
+
+  it("refuses to park incoming files through a symlinked directory", () => {
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(out, "README.md"), "mine\n");
+    symlinkSync(outside, join(out, ".openscaffold"));
+    expect(() =>
+      renderFiles([op("README.md", "theirs")], out, VARS, {
+        incomingDir: join(out, ".openscaffold/incoming"),
+      }),
+    ).toThrow(/outside/);
+    expect(existsSync(join(outside, "incoming"))).toBe(false);
   });
 });

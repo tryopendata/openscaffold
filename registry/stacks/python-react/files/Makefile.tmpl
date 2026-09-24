@@ -2,22 +2,37 @@
 #
 # A starting point: adapt the recipes to the project, but keep the target
 # names. `openscaffold verify` calls install, lint, typecheck, test, build,
-# dev-api and dev-web, and CI should call the same targets.
+# dev-api and dev-web. CI calls the backend-* and frontend-* sub-targets
+# per job; the combined targets are for local use.
 
 PORT_API ?= 8000
 PORT_WEB ?= 5173
 export PORT_API PORT_WEB
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev dev-api dev-web lint format typecheck test coverage build \
+.PHONY: help install lint format typecheck test coverage build dev dev-api dev-web \
+	backend-install backend-lint backend-format backend-typecheck backend-test backend-coverage \
+	frontend-install frontend-lint frontend-format frontend-typecheck frontend-test frontend-coverage frontend-build \
 	generate-api check-api e2e clean
 
 help: ## List targets
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
-install: ## Install backend and frontend dependencies
-	cd backend && uv sync
-	cd frontend && bun install
+# Combined targets
+
+install: backend-install frontend-install ## Install backend and frontend dependencies
+
+lint: backend-lint frontend-lint ## Lint and format-check both halves
+
+format: backend-format frontend-format ## Auto-format and auto-fix both halves
+
+typecheck: backend-typecheck frontend-typecheck ## mypy strict + tsc
+
+test: backend-test frontend-test ## Backend and frontend tests
+
+coverage: backend-coverage frontend-coverage ## Tests with coverage thresholds enforced
+
+build: frontend-build ## Production frontend build
 
 dev: ## Run API and web dev servers together
 	$(MAKE) -j2 dev-api dev-web
@@ -28,28 +43,50 @@ dev-api: ## API dev server with reload on PORT_API
 dev-web: ## Web dev server on PORT_WEB (proxies /api to PORT_API)
 	cd frontend && bun run dev --port $(PORT_WEB) --strictPort
 
-lint: ## Lint and format-check both halves
+# Backend
+
+backend-install: ## uv sync (--locked when CI is set)
+	cd backend && uv sync $(if $(CI),--locked)
+
+backend-lint: ## ruff check + ruff format --check
 	cd backend && uv run ruff check . && uv run ruff format --check .
+
+backend-format: ## ruff format + ruff check --fix
+	cd backend && uv run ruff format . && uv run ruff check --fix .
+
+backend-typecheck: ## mypy strict
+	cd backend && uv run mypy app tests
+
+backend-test: ## pytest (parallel)
+	cd backend && uv run pytest -n auto
+
+backend-coverage: ## pytest with the coverage floor
+	cd backend && uv run pytest -n auto --cov --cov-report=term-missing
+
+# Frontend
+
+frontend-install: ## bun install (frozen lockfile when CI is set)
+	cd frontend && bun install $(if $(CI),--frozen-lockfile)
+
+frontend-lint: ## ESLint + prettier --check
 	cd frontend && bun run lint
 
-format: ## Auto-format and auto-fix both halves
-	cd backend && uv run ruff format . && uv run ruff check --fix .
+frontend-format: ## prettier --write (bun run format)
 	cd frontend && bun run format
 
-typecheck: ## mypy strict + tsc
-	cd backend && uv run mypy app tests
+frontend-typecheck: ## React Router typegen + tsc
 	cd frontend && bun run typecheck
 
-test: ## Backend and frontend tests
-	cd backend && uv run pytest -n auto
+frontend-test: ## vitest run
 	cd frontend && bun run test
 
-coverage: ## Tests with coverage thresholds enforced
-	cd backend && uv run pytest -n auto --cov --cov-report=term-missing
+frontend-coverage: ## vitest with coverage thresholds
 	cd frontend && bun run test --coverage
 
-build: ## Production frontend build
+frontend-build: ## Static SPA build into frontend/build/client
 	cd frontend && bun run build
+
+# API client
 
 generate-api: ## Dump OpenAPI from the backend and regenerate the typed client
 	cd backend && uv run python scripts/dump_openapi.py ../frontend/openapi.json

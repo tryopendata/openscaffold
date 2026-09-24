@@ -13,6 +13,7 @@ import {
   spawnAgent,
 } from "./handoff.js";
 import { BRIEF_PATH } from "./manifest.js";
+import { println } from "./output.js";
 import { AGENTS, type AgentId } from "./schema/index.js";
 import type { ComposedPlan, OwnedVerifyStep } from "./types.js";
 
@@ -157,7 +158,7 @@ export async function runHandoff(
     verifyCommand: ctx.verifyCommand,
   });
   if (opts.json) return { decision, next };
-  const print = opts.print ?? ((l: string) => process.stdout.write(`${l}\n`));
+  const print = opts.print ?? println;
   print(next);
   if (decision.kind !== "launch") return { decision, next };
   const agentExit = await (opts.spawn ?? spawnAgent)(decision.bin, decision.args, ctx.dir);

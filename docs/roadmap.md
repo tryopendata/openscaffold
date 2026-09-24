@@ -44,6 +44,6 @@ v1 ships full native config for Claude Code only; Codex, OpenCode, and Cursor ge
 
 ## Later
 
-- A registry index page listing stacks with usage counts.
+- Stack directory: a web app ranking stacks and fragments by usage and verify success, with the same stats exposed in `list --json` for agents. Spec: [plans/2026-09-23-stack-directory.md](plans/2026-09-23-stack-directory.md). The telemetry opt-in vs opt-out decision should be made before the first public npm release, even though the directory ships later.
 - Hooks into spec-driven workflows (spec-kit, BMAD) so a scaffolded project can move straight into feature work.
 - An optional canary that scaffolds each stack headlessly on a schedule. v1 deliberately leaves compatibility to the agent; revisit if stacks are found to rot in ways an agent can't recover from.

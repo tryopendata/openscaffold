@@ -27,7 +27,8 @@ Personal stacks, fragments, and defaults live in ~/.openscaffold/:
 A project's own ./.openscaffold/{stacks,fragments} take precedence over both.
 
 Machine-readable output: list, show, new, add, verify, and validate all accept --json.
-\`new\`/\`add\` with --json never launch an agent. Other flags: --no-launch, --agent <name>, --offline.
+\`new\`/\`add\` with --json never launch an agent; they also take --no-launch and --agent <name>.
+list, show, new, and add take --offline (or set OPENSCAFFOLD_OFFLINE=1) to skip the registry fetch.
 
 Run \`openscaffold <command> --help\` for details.`;
 

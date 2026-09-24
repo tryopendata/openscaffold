@@ -97,8 +97,9 @@ export function register(program: Command): void {
     .description("Show a stack or fragment: metadata, guidance, and the files it writes")
     .argument("<id>", "stack or fragment id")
     .option("--json", "print as JSON")
-    .action(async (id: string, options: { json?: boolean }) => {
-      const registry = await loadRegistry({ cwd: process.cwd() });
+    .option("--offline", "don't fetch the registry; use cached and bundled entries")
+    .action(async (id: string, options: { json?: boolean; offline?: boolean }) => {
+      const registry = await loadRegistry({ cwd: process.cwd(), offline: options.offline });
       for (const w of registry.warnings) warn(w);
       const entry = registry.find(id);
       const details = entryDetails(entry);

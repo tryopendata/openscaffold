@@ -1,7 +1,17 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listEntryFiles } from "../src/entry-files.js";
 import { OpenScaffoldError } from "../src/errors.js";
 import { type FetchRemote, loadRegistry } from "../src/registry/index.js";
 
@@ -66,7 +76,7 @@ describe("precedence", () => {
     const x = reg.fragment("x");
     expect(x.meta.name).toBe("project x");
     expect(x.origin).toBe("project");
-    expect(x.trusted).toBe(true);
+    expect(x.trusted).toBe(false);
     expect(x.shadows).toEqual(["user", "bundled"]);
     expect(reg.warnings).toContainEqual(
       expect.stringContaining("./.openscaffold/fragments/x shadows the bundled x"),
@@ -77,7 +87,13 @@ describe("precedence", () => {
     fragment(join(home, ".openscaffold"), "x", "", { name: "user x" });
     const reg = await load();
     expect(reg.fragment("x").origin).toBe("user");
+    expect(reg.fragment("x").trusted).toBe(true);
     expect(reg.warnings).toEqual([]);
+  });
+
+  it("trusts project entries that don't shadow a registry or bundled id", async () => {
+    fragment(join(cwd, ".openscaffold"), "mine");
+    expect((await load()).fragment("mine").trusted).toBe(true);
   });
 
   it("warns when a project entry shadows the main registry", async () => {
@@ -87,6 +103,7 @@ describe("precedence", () => {
       fetchRemote: async (_s, dest) => fragment(dest, "y"),
     });
     expect(reg.fragment("y").shadows).toEqual(["registry"]);
+    expect(reg.fragment("y").trusted).toBe(false);
     expect(reg.warnings.join("\n")).toContain("shadows the registry y");
   });
 
@@ -248,5 +265,147 @@ describe("remote registry cache", () => {
     await load({ offline: false, fetchRemote });
     await load({ offline: false, fetchRemote, registrySource: "gh:other/repo/registry" });
     expect(seen).toEqual(["gh:me/fork/registry#dev", "gh:other/repo/registry"]);
+  });
+});
+
+describe("symlinks in entries", () => {
+  it("listEntryFiles refuses symlinks, naming the file", () => {
+    const dir = join(tmp, "entry");
+    write(join(dir, "files", "ok.txt"), "ok");
+    write(join(tmp, "secret"), "secret");
+    symlinkSync(join(tmp, "secret"), join(dir, "files", "id_rsa"));
+    expect(() => listEntryFiles(dir, ["claude"])).toThrow(OpenScaffoldError);
+    expect(() => listEntryFiles(dir, ["claude"])).toThrow(/files\/id_rsa/);
+  });
+
+  it("refuses a symlink loop instead of crashing with ELOOP", () => {
+    const dir = join(tmp, "entry");
+    mkdirSync(join(dir, "files"), { recursive: true });
+    symlinkSync("..", join(dir, "files", "loop"));
+    expect(() => listEntryFiles(dir, [])).toThrow(/symlink/);
+  });
+
+  it("refuses a symlinked files/ or adapters/ directory", () => {
+    const dir = join(tmp, "entry");
+    mkdirSync(join(tmp, "elsewhere", "claude"), { recursive: true });
+    write(join(tmp, "elsewhere", "claude", "x"), "x");
+    mkdirSync(dir);
+    symlinkSync(join(tmp, "elsewhere"), join(dir, "adapters"));
+    expect(() => listEntryFiles(dir, ["claude"])).toThrow(/adapters/);
+    symlinkSync(join(tmp, "elsewhere"), join(dir, "files"));
+    expect(() => listEntryFiles(dir, [])).toThrow(/files/);
+  });
+
+  it("skips a registry entry that ships a symlink, falling back to bundled", async () => {
+    const reg = await load({
+      offline: false,
+      fetchRemote: async (_s, dest) => {
+        fragment(dest, "x", "", { name: "remote x" });
+        mkdirSync(join(dest, "fragments", "x", "files"));
+        symlinkSync("/etc/hosts", join(dest, "fragments", "x", "files", "hosts"));
+      },
+    });
+    expect(reg.fragment("x").meta.name).toBe("bundled x");
+    expect(reg.warnings.join("\n")).toContain("symlink");
+  });
+});
+
+describe("registry template check", () => {
+  it("skips registry entries whose .tmpl files use unknown vars, falling back to bundled", async () => {
+    const reg = await load({
+      offline: false,
+      fetchRemote: async (_s, dest) => {
+        fragment(dest, "x", "", { name: "remote x" });
+        write(join(dest, "fragments", "x", "files", "README.md.tmpl"), "{{ future_var }}");
+      },
+    });
+    expect(reg.fragment("x").meta.name).toBe("bundled x");
+    expect(reg.warnings.join("\n")).toContain("{{future_var}}");
+  });
+});
+
+describe("registry source changes", () => {
+  const cacheFrom = async (source: string) =>
+    load({
+      offline: false,
+      registrySource: source,
+      fetchRemote: async (_s, d) => fragment(d, "old"),
+    });
+
+  it("ignores a cache fetched from a different source when offline", async () => {
+    await cacheFrom("gh:a/b/registry");
+    const reg = await load({ offline: true, registrySource: "gh:c/d/registry" });
+    expect(reg.get("fragment", "old")).toBeUndefined();
+    expect(reg.warnings.join("\n")).toMatch(
+      /wasn.t fetched from the configured source gh:c\/d\/registry/,
+    );
+  });
+
+  it("ignores a cache from a different source when the fetch fails, and while backing off", async () => {
+    await cacheFrom("gh:a/b/registry");
+    let now = 5 * DAY;
+    const opts = {
+      offline: false,
+      registrySource: "gh:c/d/registry",
+      fetchRemote: noFetch,
+      now: () => now,
+    };
+    const reg = await load(opts);
+    expect(reg.get("fragment", "old")).toBeUndefined();
+    expect(reg.warnings.join("\n")).toMatch(/couldn't fetch the registry.*bundled entries only/);
+    now += 60_000;
+    expect((await load(opts)).get("fragment", "old")).toBeUndefined();
+  });
+});
+
+describe("remote download hygiene", () => {
+  it("sweeps stale registry.tmp-* dirs left by abandoned downloads", async () => {
+    const cacheParent = join(home, ".openscaffold", "cache");
+    const stale = join(cacheParent, "registry.tmp-stale");
+    mkdirSync(stale, { recursive: true });
+    const old = new Date(Date.now() - DAY);
+    utimesSync(stale, old, old);
+    await load({ offline: false, fetchRemote: async (_s, d) => fragment(d, "r") });
+    expect(existsSync(stale)).toBe(false);
+    expect(readdirSync(cacheParent).filter((n) => n.startsWith("registry.tmp-"))).toEqual([]);
+  });
+});
+
+describe("missing registry source", () => {
+  const notFound: FetchRemote = async () => {
+    throw new Error(
+      "Failed to download https://api.github.com/repos/x/y/tarball/main: 404 Not Found",
+    );
+  };
+
+  it("says the source doesn't exist and backs off for a day", async () => {
+    let calls = 0;
+    const fetchRemote: FetchRemote = async (s, d) => {
+      calls++;
+      return notFound(s, d);
+    };
+    let now = 0;
+    const first = await load({ offline: false, fetchRemote, now: () => now });
+    expect(first.warnings.join("\n")).toMatch(/isn't published yet|doesn't exist/);
+    now += 2 * 60 * 60 * 1000;
+    const second = await load({ offline: false, fetchRemote, now: () => now });
+    expect(calls).toBe(1);
+    expect(second.warnings).toEqual([]);
+    now += DAY;
+    await load({ offline: false, fetchRemote, now: () => now });
+    expect(calls).toBe(2);
+  });
+
+  it("retries transient failures after the short backoff", async () => {
+    let calls = 0;
+    const failing: FetchRemote = async () => {
+      calls++;
+      throw new Error("ECONNRESET");
+    };
+    let now = 0;
+    await load({ offline: false, fetchRemote: failing, now: () => now });
+    now += 2 * 60 * 60 * 1000;
+    await load({ offline: false, fetchRemote: failing, now: () => now });
+    expect(calls).toBe(2);
   });
 });

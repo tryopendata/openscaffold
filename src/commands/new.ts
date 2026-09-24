@@ -1,13 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Command } from "commander";
 import { buildBrief, cliInvocation } from "../brief.js";
 import { compose } from "../compose.js";
 import { loadUserConfig } from "../config.js";
 import { OpenScaffoldError } from "../errors.js";
 import type { HandoffDecision } from "../handoff.js";
-import { hashVerify, writeManifest } from "../manifest.js";
-import { printJson } from "../output.js";
+import { hashVerify, MANIFEST_PATH, writeManifest } from "../manifest.js";
+import { printJson, println, warn } from "../output.js";
 import { loadRegistry } from "../registry/index.js";
 import { renderFiles } from "../render.js";
 import {
@@ -22,6 +22,7 @@ import {
   writeBrief,
 } from "../scaffold.js";
 import { SCHEMA_VERSION } from "../schema/index.js";
+import type { ComposedPlan } from "../types.js";
 import { buildVars, slugify } from "../vars.js";
 import { VERSION } from "../version.js";
 
@@ -57,27 +58,50 @@ export interface NewResult {
 
 const IGNORED_IN_TARGET = new Set([".git", ".DS_Store"]);
 
-function assertEmptyTarget(dir: string): void {
+/** Files under `dir` (relative, "/"-separated), skipping IGNORED_IN_TARGET names. */
+function listTarget(dir: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (IGNORED_IN_TARGET.has(entry.name)) continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...listTarget(join(dir, entry.name), rel));
+    else out.push(rel);
+  }
+  return out;
+}
+
+/**
+ * Refuse a non-empty target. A directory with no manifest that holds `.openscaffold/` or only
+ * files this plan would write is most likely a `new` that stopped partway, so the hint says to
+ * delete it and start over rather than to run `add` on it.
+ */
+function assertEmptyTarget(dir: string, plan: ComposedPlan): void {
   if (!existsSync(dir)) return;
   if (!statSync(dir).isDirectory()) {
     throw new OpenScaffoldError("target_not_dir", `${dir} exists and isn't a directory`);
   }
   const extra = readdirSync(dir).filter((n) => !IGNORED_IN_TARGET.has(n));
-  if (extra.length) {
-    throw new OpenScaffoldError(
-      "target_not_empty",
-      `${dir} isn't empty (${extra.slice(0, 5).join(", ")}${extra.length > 5 ? ", ..." : ""})`,
-      `\`new\` only scaffolds into an empty directory. For an existing repo, run \`openscaffold add <fragment...> --dir ${dir}\`; otherwise pick a new directory.`,
-    );
-  }
+  if (extra.length === 0) return;
+  const message = `${dir} isn't empty (${extra.slice(0, 5).join(", ")}${extra.length > 5 ? ", ..." : ""})`;
+  const planned = new Set(plan.files.map((f) => f.dest));
+  const halfFinished =
+    !existsSync(join(dir, MANIFEST_PATH)) &&
+    (extra.includes(".openscaffold") || listTarget(dir).every((f) => planned.has(f)));
+  throw new OpenScaffoldError(
+    "target_not_empty",
+    message,
+    halfFinished
+      ? `This looks like an earlier \`openscaffold new\` that didn't finish (no ${MANIFEST_PATH}). If nothing in it is yours, delete ${dir} and re-run \`openscaffold new\`; otherwise pick a new directory.`
+      : `\`new\` only scaffolds into an empty directory. For an existing repo, run \`openscaffold add <fragment...> --dir ${dir}\`; otherwise pick a new directory.`,
+  );
 }
 
 /** `openscaffold new`: scaffold a stack into an empty directory and hand off to an agent. */
 export async function runNew(opts: NewOptions): Promise<NewResult> {
   const cwd = opts.cwd ?? process.cwd();
   const home = opts.home;
-  const warnLine = opts.warn ?? ((l: string) => process.stderr.write(`warning: ${l}\n`));
-  const print = opts.print ?? ((l: string) => process.stdout.write(`${l}\n`));
+  const warnLine = opts.warn ?? warn;
+  const print = opts.print ?? println;
 
   const config = loadUserConfig(home);
   const registry = await loadRegistry({
@@ -88,7 +112,6 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
   });
   const stack = registry.stack(opts.stack);
   const dir = resolve(cwd, opts.dir ?? (opts.name ? slugify(opts.name) : stack.id));
-  assertEmptyTarget(dir);
 
   const sandbox = Boolean(opts.sandbox) || config.preset === "sandbox";
   const agents = resolveAgents(opts.agents, detected(opts), config.agents);
@@ -104,6 +127,7 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     },
     { hasTool: opts.hasTool },
   );
+  assertEmptyTarget(dir, plan);
   const warnings = [...registry.warnings, ...plan.warnings];
   if (!opts.json) for (const w of warnings) warnLine(w);
 

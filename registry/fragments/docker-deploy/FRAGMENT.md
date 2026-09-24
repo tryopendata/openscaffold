@@ -20,42 +20,42 @@ verify:
 
 # Docker images + GHCR
 
-Add a production image for each deployable part of the project and a workflow that publishes them. Write the Dockerfiles and workflow against current base images and action versions; nothing is copied for you.
+A production image per deployable part and a workflow that publishes them, written against current base images and action versions.
 
 ## What to add
 
-**Dockerfiles**, one per deployable, next to the code (`backend/Dockerfile`, `frontend/Dockerfile`). Use the repo root as the build context only if the image needs files outside its directory. Every image follows the same rules:
-- **Multi-stage**: a dependency stage, a build stage if there's a build step, and a minimal runtime stage. Only runtime artifacts reach the last stage.
-- **Layer caching**: copy only the manifest and lockfile first, install with a frozen lockfile, then copy the source. A source edit must not reinstall dependencies.
-- **Non-root**: create a user and group with a fixed uid/gid, `COPY --chown` everything the app reads, and set `USER` before `CMD`.
-- **Healthcheck**: `HEALTHCHECK` hitting the app's health endpoint on its port. Prefer a check that uses the runtime already in the image (a one-line Python or bun fetch) over installing curl just for this.
-- **Config from env**: the port and every setting come from environment variables. No secrets in the image or in build args. Build args are for public build-time values only (for example a `VITE_PUBLIC_*` key baked into a static bundle).
-- **Signals**: exec-form `CMD` so the process is PID 1 and receives SIGTERM. The server shuts down gracefully.
-- **.dockerignore** next to each Dockerfile (or at the context root): exclude `.git`, `.env*`, `node_modules`, virtualenvs, caches, test output, and build output.
+**Dockerfiles** next to the code (`backend/Dockerfile`, `frontend/Dockerfile`); root context only if an image needs files outside its directory. Every image:
+- Multi-stage: deps, build (if any), minimal runtime with only runtime artifacts.
+- Manifest and lockfile copied first and installed frozen, then source, so a source edit doesn't reinstall.
+- Non-root user with fixed uid/gid, `COPY --chown`, `USER` before `CMD`.
+- `HEALTHCHECK` on the health endpoint using the image's own runtime (no curl just for this).
+- All config from env; no secrets in the image or build args (build args only for public values like a `VITE_PUBLIC_*` key).
+- Exec-form `CMD` so the app gets SIGTERM and shuts down gracefully.
+- `.dockerignore`: `.git`, `.env*`, `node_modules`, virtualenvs, caches, test and build output.
 
-**Per stack.**
-- *Python API*: base on the official slim Python image matching `.python-version`. Copy the uv binary from uv's official image in the build stage, `uv sync --locked --no-dev --no-install-project` before copying source, then sync again with the project. Copy the virtualenv to the runtime stage at the same path so script shebangs still resolve, put its `bin` on `PATH`, set `PYTHONUNBUFFERED=1` and `PYTHONDONTWRITEBYTECODE=1`, and run uvicorn bound to `0.0.0.0` on the configured port with proxy headers enabled.
-- *React SPA*: build with bun in the build stage (public build args for any `VITE_PUBLIC_*` values), then serve `build/client` from an unprivileged static server image (nginx's unprivileged variant, or Caddy). Configure the SPA fallback to `index.html`, long-lived immutable caching for hashed assets, `no-cache` for `index.html`, and a `/healthz` location for the healthcheck. If the API shares the origin, proxy `/api` to it in this server's config.
-- *Go*: build with `CGO_ENABLED=0` and version ldflags in the official Go image, then copy the static binary into a distroless or scratch-style runtime running as nonroot.
+<!-- openscaffold:when tag=python -->
+**Python API**: slim Python base matching `.python-version`; copy the uv binary from uv's official image; `uv sync --locked --no-dev --no-install-project`, copy source, sync again. Copy the venv to the runtime stage at the same path, put its `bin` on `PATH`, set `PYTHONUNBUFFERED=1` and `PYTHONDONTWRITEBYTECODE=1`, run uvicorn on `0.0.0.0` with proxy headers.
+<!-- openscaffold:end -->
+<!-- openscaffold:when stack=python-react -->
+**React SPA**: build with bun, serve `build/client` from an unprivileged nginx or Caddy image with the `index.html` fallback, immutable caching for hashed assets, `no-cache` for `index.html`, a `/healthz` location, and a `/api` proxy if the API shares the origin.
+<!-- openscaffold:end -->
+<!-- openscaffold:when tag=go -->
+**Go**: `CGO_ENABLED=0` with version ldflags in the official Go image, static binary copied into a distroless nonroot runtime.
+<!-- openscaffold:end -->
 
-**Migrations** (if the postgres fragment is present): run them as a separate one-shot command using the same image (`docker run <image> <migrate command>`), not on container start. Two replicas starting together must not race on migrations.
+<!-- openscaffold:when with=postgres -->
+**Migrations** run as a one-shot `docker run <image> <migrate command>`, never on container start, so replicas can't race.
+<!-- openscaffold:end -->
 
-**Makefile targets**:
-- `docker-build`: build every image locally, tagged `<project-slug>-<part>:local`. Verify calls this.
-- `docker-run`: run the images together for a local production-like check (a `compose.prod.yaml` is fine for multi-image projects), using `.env` for settings.
+**Makefile**: `docker-build` builds every image as `<project-slug>-<part>:local` (verify calls it); `docker-run` runs them together with `.env` (a `compose.prod.yaml` for several images).
 
-**Publish workflow** `.github/workflows/docker-publish.yml`:
-- Trigger per the decision: `workflow_run` on the CI workflow for the default branch (proceed only when `github.event.workflow_run.conclusion == 'success'` and check out that run's `head_sha`), plus `push` of `v*` tags.
-- `permissions: { contents: read, packages: write }` at job level.
-- A matrix with one entry per image (name, Dockerfile, context). Set up Buildx, log in to `ghcr.io` with `GITHUB_TOKEN`, generate tags with Docker's metadata action (short SHA always, semver tags on version tags, `latest` only on the default branch), and build and push with the GitHub Actions cache backend scoped per image.
-- Image names: `ghcr.io/<owner>/<repo>/<part>`, lowercased (GHCR rejects uppercase).
-- Pin every action by full commit SHA with a version comment, and look SHAs up when writing the file.
-- `concurrency` group per ref with `cancel-in-progress: false`. A half-pushed release is worse than a queued one.
-
-## Verify
-
-`image-build` runs `make docker-build`. It's tagged `prod`, so `--sandbox` skips it. Docker must be running.
+**`.github/workflows/docker-publish.yml`**:
+- Trigger per the decision: `workflow_run` of CI on the default branch, proceeding only on `conclusion == 'success'` and checking out that run's `head_sha`, plus `v*` tag pushes.
+- Job permissions `contents: read, packages: write`.
+- Matrix per image; Buildx; log in to `ghcr.io` with `GITHUB_TOKEN`; tags from Docker's metadata action (short SHA, semver on tags, `latest` on the default branch only); build and push with the GitHub Actions cache scoped per image.
+- Image names `ghcr.io/<owner>/<repo>/<part>`, lowercased.
+- Actions pinned by full commit SHA; `concurrency` per ref with `cancel-in-progress: false`.
 
 ## AGENTS.md
 
-Add a **Deploy** section: which images exist and their Dockerfiles, `make docker-build` / `make docker-run`, where images are published and when, how migrations run in production, and the rule that images never contain secrets. Under Pending user actions, list anything the user must do on GitHub (package visibility, and the deploy target and its secrets once chosen).
+A **Deploy** section: images and Dockerfiles, `make docker-build`/`docker-run`, where and when images publish, how migrations run, no secrets in images. Pending user actions: package visibility on GitHub, and the deploy target and its secrets once chosen.

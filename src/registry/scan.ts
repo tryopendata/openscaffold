@@ -1,9 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ZodError } from "zod";
+import { listEntryFiles } from "../entry-files.js";
 import { OpenScaffoldError } from "../errors.js";
 import { parseFrontmatter } from "../frontmatter.js";
-import { FragmentMetaSchema, SCHEMA_VERSION, StackMetaSchema } from "../schema/index.js";
+import { unknownTemplateVars } from "../render.js";
+import { AGENTS, FragmentMetaSchema, SCHEMA_VERSION, StackMetaSchema } from "../schema/index.js";
 import type { Entry, Origin } from "../types.js";
 
 export type EntryKind = "stack" | "fragment";
@@ -35,7 +37,7 @@ export function formatZodIssues(err: ZodError): string {
     .join("; ");
 }
 
-function isDir(path: string): boolean {
+export function isDir(path: string): boolean {
   try {
     return statSync(path).isDirectory();
   } catch {
@@ -96,6 +98,23 @@ export function readEntry(
   };
 }
 
+/** Why an entry's files can't be rendered (symlinks, unknown template vars), or undefined. */
+function checkEntryFiles(dir: string): string | undefined {
+  let files: ReturnType<typeof listEntryFiles>;
+  try {
+    files = listEntryFiles(dir, AGENTS);
+  } catch (err) {
+    if (err instanceof OpenScaffoldError) return err.message;
+    throw err;
+  }
+  for (const f of files) {
+    if (!f.template) continue;
+    const [unknown] = unknownTemplateVars(readFileSync(f.src, "utf8"));
+    if (unknown !== undefined) return `${f.src} uses unknown template variable {{${unknown}}}`;
+  }
+  return undefined;
+}
+
 /** List entry directories of one kind under a registry root (sorted, hidden dirs skipped). */
 export function entryDirs(root: string, kind: EntryKind): string[] {
   const base = join(root, KIND_DIR[kind]);
@@ -112,8 +131,24 @@ export function scanRoot(root: string, origin: Origin): ScanResult {
   for (const kind of ["stack", "fragment"] as const) {
     for (const dir of entryDirs(root, kind)) {
       const r = readEntry(dir, kind, origin);
-      if ("entry" in r) result.entries.push(r.entry);
-      else result.problems.push(r.problem);
+      if (!("entry" in r)) {
+        result.problems.push(r.problem);
+        continue;
+      }
+      // Registry entries are fetched over the network and may target a newer CLI: check their
+      // files now so a bad one is skipped in favor of the bundled copy instead of failing later.
+      const fileProblem = origin === "registry" ? checkEntryFiles(dir) : undefined;
+      if (fileProblem) {
+        result.problems.push({
+          kind,
+          id: r.entry.id,
+          file: join(dir, KIND_FILE[kind]),
+          reason: "invalid",
+          message: fileProblem,
+        });
+      } else {
+        result.entries.push(r.entry);
+      }
     }
   }
   return result;

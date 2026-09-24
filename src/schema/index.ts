@@ -43,6 +43,7 @@ export const VerifyStepSchema = z
     tags: z.array(z.string()).default([]).describe("e.g. [prod]; --sandbox skips prod"),
     expect: z
       .object({
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} is verify's env syntax, described literally
         http: z.string().describe("URL to probe; ${VAR} is expanded from the verify env"),
         within: duration.default("60s"),
       })

@@ -25,6 +25,8 @@ export interface StepResult {
 
 export interface VerifyReport {
   ok: boolean;
+  /** Stopped by SIGINT/SIGTERM. */
+  interrupted: boolean;
   projectDir: string;
   steps: StepResult[];
   warnings: string[];
@@ -70,6 +72,30 @@ export function parseDuration(d: string): number {
 
 export function expandVars(text: string, env: Record<string, string>): string {
   return text.replace(/\$\{(\w+)\}/g, (whole, key: string) => env[key] ?? whole);
+}
+
+/** `${VAR}` references in a probe URL template. */
+function probeVars(template: string): string[] {
+  return [...new Set([...template.matchAll(/\$\{(\w+)\}/g)].map((m) => m[1] as string))];
+}
+
+/** Why an expanded probe URL can never succeed, or undefined when it looks usable. */
+export function probeUrlProblem(url: string): string | undefined {
+  const unset = probeVars(url);
+  if (unset.length > 0) {
+    const refs = unset.map((v) => `\${${v}}`).join(", ");
+    return `expect.http uses ${refs}, but ${unset.join(", ")} ${unset.length > 1 ? "aren't" : "isn't"} set in the manifest env or the environment; export it or add it to the manifest's env`;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `expect.http "${url}" is not a valid URL`;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return `expect.http "${url}" must be an http:// or https:// URL`;
+  }
+  return undefined;
 }
 
 class OutputTail {
@@ -295,6 +321,29 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
 
   async function runServe(step: VerifyStep, cwd: string, url: string): Promise<StepResult> {
     const start = Date.now();
+    const base = {
+      name: step.name,
+      phase: step.phase,
+      run: step.run,
+    };
+    // A server that's already answering (often one a previous run left daemonized) would make
+    // the probe pass without this step's command doing anything.
+    const stale = await probe(url, 1000).then(
+      () => true,
+      () => false,
+    );
+    if (stale) {
+      const vars = probeVars(step.expect?.http ?? "");
+      const fix = vars.length
+        ? `set ${vars.join(" or ")} to a free port`
+        : "change the port in expect.http";
+      return {
+        ...base,
+        status: "failed",
+        durationMs: Date.now() - start,
+        reason: `something is already listening on ${url} (a leftover dev server?); stop it or ${fix}`,
+      };
+    }
     const within = parseDuration(step.expect?.within ?? "60s");
     const deadline = start + within;
     const r = spawn(step, cwd);
@@ -316,7 +365,9 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
         if (exit) {
           reason = exit.error
             ? `could not start: ${exit.error}`
-            : `server exited (${exit.code === null ? "signal" : `code ${exit.code}`}) before ${url} responded`;
+            : exit.code === 0
+              ? `the command exited 0 before ${url} responded, so it probably daemonized or backgrounded itself; serve commands must stay in the foreground so verify can probe the server and then stop it`
+              : `server exited (${exit.code === null ? "signal" : `code ${exit.code}`}) before ${url} responded`;
           break;
         }
         const remaining = deadline - Date.now();
@@ -344,14 +395,9 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
       onInterrupt = undefined;
       await terminate(r);
     }
-    const base = {
-      name: step.name,
-      phase: step.phase,
-      run: step.run,
-      durationMs: Date.now() - start,
-    };
-    if (reason === undefined) return { ...base, status: "passed" };
-    return { ...base, status: "failed", reason, outputTail: r.output.tail() };
+    const durationMs = Date.now() - start;
+    if (reason === undefined) return { ...base, durationMs, status: "passed" };
+    return { ...base, durationMs, status: "failed", reason, outputTail: r.output.tail() };
   }
 
   const results: StepResult[] = [];
@@ -402,7 +448,17 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
             reason: `cwd ${step.cwd} does not exist`,
           };
         } else if (phase === "serve" && url) {
-          result = await runServe(step, cwd, url);
+          const problem = probeUrlProblem(url);
+          result = problem
+            ? {
+                name: step.name,
+                phase: step.phase,
+                run: step.run,
+                status: "failed",
+                durationMs: 0,
+                reason: problem,
+              }
+            : await runServe(step, cwd, url);
         } else {
           result = await runCommand(step, cwd);
         }
@@ -422,6 +478,7 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
   for (const r of results) totals[r.status]++;
   return {
     ok: totals.failed === 0 && !interrupted,
+    interrupted,
     projectDir,
     steps: results,
     warnings,

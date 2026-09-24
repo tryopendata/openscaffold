@@ -29,8 +29,15 @@ file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null) || cwd=""
 [ -n "$file_path" ] && [ -f "$file_path" ] || exit 0
 
+# Compare physical paths: the project dir, the cwd, and the file path can reach
+# the same place through different symlinks (on macOS /tmp is /private/tmp).
+file_dir=$(cd "$(dirname "$file_path")" && pwd -P) || exit 0
+file_path="$file_dir/$(basename "$file_path")"
+if [ -n "$cwd" ]; then cwd=$(cd "$cwd" 2>/dev/null && pwd -P) || cwd=""; fi
+
 # Only files in this project (or the worktree the agent is working in).
 root=$(project_root)
+root=$(cd "$root" && pwd -P) || exit 0
 case "$file_path" in
 "$root"/*) ;;
 *)
@@ -131,7 +138,10 @@ esac
 
 out=$(printf '%s' "$out" | strip_control)
 # Project-relative paths read better and cost fewer tokens.
-out=${out//"$root/"/}
+# The prefix goes through a variable: bash 3.2 treats a "/" inside a quoted
+# pattern as the ${var//pattern/replacement} delimiter.
+prefix="$root/"
+out=${out//"$prefix"/}
 [ -z "${out//[[:space:]]/}" ] && exit 0
 
 # Keep the payload small. Cut by line, not byte, so multi-byte characters survive.

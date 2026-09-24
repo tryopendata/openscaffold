@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stop: format the files changed in the working tree (staged, unstaged, and new
 # untracked files) at the end of each turn, so what the agent leaves behind is
-# formatted even if nobody runs the formatter by hand.
+# formatted even if nobody runs the formatter by hand. That is every changed
+# file, including ones you are editing yourself; see .claude/README.md.
 #
 # Only formatters the project has opted into run, and only on the files they own:
 #
@@ -24,13 +25,6 @@ cat >/dev/null 2>&1 || true # payload unused
 root=$(project_root)
 cd "$root" 2>/dev/null || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-
-# Works before the first commit too (no HEAD needed).
-changed=$({
-  git diff --name-only --cached --diff-filter=d 2>/dev/null || true
-  git ls-files --modified --others --exclude-standard 2>/dev/null || true
-} | sort -u)
-[ -z "$changed" ] && exit 0
 
 plan=$(mktemp "${TMPDIR:-/tmp}/claude-format.XXXXXX") || exit 0
 trap 'rm -f "$plan"' EXIT
@@ -81,11 +75,18 @@ formatter_for() {
   esac
 }
 
-while IFS= read -r rel; do
+# NUL-separated (-z) so git doesn't quote paths with spaces or non-ASCII
+# characters. Works before the first commit too (no HEAD needed).
+while IFS= read -r -d '' rel; do
+  # The plan file is tab- and newline-separated.
+  case "$rel" in *$'\t'* | *$'\n'*) continue ;; esac
   [ -n "$rel" ] && [ -f "$root/$rel" ] || continue
   key=$(formatter_for "$root/$rel") || continue
   printf '%s\t%s\n' "$key" "$root/$rel" >>"$plan"
-done <<<"$changed"
+done < <({
+  git diff -z --name-only --cached --diff-filter=d 2>/dev/null || true
+  git ls-files -z --modified --others --exclude-standard 2>/dev/null || true
+} | sort -zu)
 
 [ -s "$plan" ] || exit 0
 

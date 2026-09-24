@@ -1,15 +1,8 @@
 {
-  "_readme": [
-    "Shared Claude Code config, committed. Machine-specific overrides (extra permissions, env, personal MCP servers) go in .claude/settings.local.json, which is gitignored.",
-    "Hooks live in .claude/hooks/ and are documented in .claude/README.md. They are advisory or guard-only, exit 0 when their tool isn't installed, and need jq to read their input.",
-    "permissions.deny repeats the worst destructive shapes so they stay blocked even where jq is missing and block-destructive.sh can't run."
-  ],
   "permissions": {
     "deny": [
       "Bash(rm -rf /)",
-      "Bash(rm -rf /*)",
       "Bash(rm -rf ~)",
-      "Bash(rm -rf ~/*)",
       "Bash(rm -rf .)",
       "Bash(git push --force)",
       "Bash(git push --force *)",

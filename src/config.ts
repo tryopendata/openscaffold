@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { OpenScaffoldError } from "./errors.js";
+import { formatZodIssues } from "./registry/scan.js";
 import { type UserConfig, UserConfigSchema } from "./schema/index.js";
 
 export function userConfigPath(home: string = homedir()): string {
@@ -27,12 +28,9 @@ export function loadUserConfig(home: string = homedir()): UserConfig {
 
   const result = UserConfigSchema.safeParse(data ?? {});
   if (!result.success) {
-    const issues = result.error.issues
-      .map((i) => `${i.path.length ? i.path.join(".") : "(root)"}: ${i.message}`)
-      .join("; ");
     throw new OpenScaffoldError(
       "config_invalid",
-      `${file} is invalid: ${issues}`,
+      `${file} is invalid: ${formatZodIssues(result.error)}`,
       `Valid keys: ${Object.keys(UserConfigSchema.shape).join(", ")}. Fix or remove the listed fields.`,
     );
   }

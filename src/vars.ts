@@ -60,7 +60,12 @@ export function inferProjectName(dir: string): string {
   const gomod = readText(join(dir, "go.mod"));
   if (gomod) {
     const module = /^\s*module\s+(\S+)/m.exec(gomod)?.[1];
-    const last = module?.split("/").filter(Boolean).pop();
+    // A major-version suffix (`.../widget/v2`) isn't the name; take the segment before it.
+    const last = module
+      ?.replace(/\/v\d+\/?$/, "")
+      .split("/")
+      .filter(Boolean)
+      .pop();
     if (last) return last;
   }
   return basename(dir);

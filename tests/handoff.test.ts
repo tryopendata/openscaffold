@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { execa } from "execa";
 import { describe, expect, it } from "vitest";
 import {
   agentPrompt,
@@ -7,6 +11,8 @@ import {
   handoffMessage,
   launchArgs,
 } from "../src/handoff.js";
+
+const HANDOFF = resolve(import.meta.dirname, "../src/handoff.ts");
 
 describe("detectAgent", () => {
   it.each([
@@ -112,5 +118,72 @@ describe("handoffMessage", () => {
     const text = handoffMessage({ kind: "print", reason: "--no-launch" }, ctx);
     expect(text).toContain(agentPrompt(ctx.verifyCommand));
     expect(text).toContain("cd demo && claude ");
+  });
+
+  it("uses the preferred agent's binary and arguments in the example, and quotes the dir", () => {
+    const decision = decideHandoff({
+      env: {},
+      isTTY: true,
+      trusted: true,
+      launch: false,
+      preferred: "opencode",
+      verifyCommand: ctx.verifyCommand,
+      hasBinary: () => true,
+    });
+    const text = handoffMessage(decision, { ...ctx, dir: "my demo" });
+    expect(text).toContain('cd "my demo" && opencode --prompt ');
+    const fromConfig = decideHandoff({
+      env: {},
+      isTTY: false,
+      trusted: true,
+      configAgents: ["cursor"],
+      verifyCommand: ctx.verifyCommand,
+    });
+    expect(handoffMessage(fromConfig, ctx)).toContain("cd demo && cursor-agent ");
+  });
+});
+
+describe("spawnAgent", () => {
+  it("survives SIGINT while the agent runs and forwards SIGTERM to it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "os-handoff-"));
+    try {
+      const script = join(dir, "run.ts");
+      writeFileSync(
+        script,
+        `import { writeFileSync } from "node:fs";
+import { spawnAgent } from ${JSON.stringify(HANDOFF)};
+const before = process.listenerCount("SIGINT");
+const p = spawnAgent("sh", ["-c", "echo $$ > child.pid; exec sleep 30"], ${JSON.stringify(dir)});
+setTimeout(() => writeFileSync("ready", ""), 300);
+const code = await p;
+console.log(JSON.stringify({ code, leaked: process.listenerCount("SIGINT") - before }));
+`,
+      );
+      const child = execa("bun", [script], { cwd: dir, reject: false });
+      let exited = false;
+      void child.then(() => {
+        exited = true;
+      });
+      const exists = (f: string) => {
+        try {
+          readFileSync(join(dir, f));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      for (let i = 0; i < 100 && !exists("ready"); i++) await new Promise((r) => setTimeout(r, 50));
+      const childPid = Number(readFileSync(join(dir, "child.pid"), "utf8"));
+      child.kill("SIGINT");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(exited).toBe(false);
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+      child.kill("SIGTERM");
+      const res = await child;
+      expect(JSON.parse(res.stdout)).toEqual({ code: 143, leaked: 0 });
+      expect(() => process.kill(childPid, 0)).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

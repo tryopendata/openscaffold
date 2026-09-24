@@ -2,7 +2,7 @@
 #
 # A starting point: adapt the recipes, but keep the target names.
 # `openscaffold verify` calls install, build, lint, test and smoke, and CI
-# should call the same targets.
+# should call the same targets (golangci-lint's own action is the one exception).
 
 BIN      := {{project_slug}}
 PKG      := ./cmd/$(BIN)
@@ -21,7 +21,14 @@ GOLANGCI_LINT := $(shell command -v golangci-lint 2>/dev/null || echo $(GOBIN_DI
 GOIMPORTS     := $(shell command -v goimports 2>/dev/null || echo $(GOBIN_DIR)/goimports)
 
 .DEFAULT_GOAL := help
-.PHONY: help install build lint lint-fix fmt fmt-check test test-integration coverage smoke ci clean
+.PHONY: help install build lint lint-fix fmt fmt-check test test-integration coverage vuln smoke ci clean
+
+# Fails when golangci-lint is missing; warns when it differs from .golangci-version.
+define require_golangci_lint
+@[ -x "$(GOLANGCI_LINT)" ] || { echo "golangci-lint not found. Install it: https://golangci-lint.run/welcome/install/"; exit 1; }
+@if [ -f .golangci-version ]; then want="$$(sed 's/^v//' .golangci-version | tr -d '[:space:]')"; \
+	"$(GOLANGCI_LINT)" --version | grep -q "$$want" || echo "warning: golangci-lint differs from .golangci-version ($$want); CI uses that version" >&2; fi
+endef
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -34,18 +41,19 @@ build: ## Build the binary into bin/ with version info
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BIN) $(PKG)
 
 lint: ## Run golangci-lint
-	@[ -x "$(GOLANGCI_LINT)" ] || { echo "golangci-lint not found. Install it: https://golangci-lint.run/welcome/install/"; exit 1; }
+	$(require_golangci_lint)
 	"$(GOLANGCI_LINT)" run
 
 lint-fix: ## Run golangci-lint with --fix
+	$(require_golangci_lint)
 	"$(GOLANGCI_LINT)" run --fix
 
 fmt: ## Format code
 	gofmt -w .
 	"$(GOIMPORTS)" -w .
 
-fmt-check: ## Fail if any file is unformatted
-	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "Unformatted files:"; echo "$$out"; exit 1; fi
+fmt-check: ## Fail if gofmt or goimports would change any file
+	@out="$$(gofmt -l . ; "$(GOIMPORTS)" -l .)"; if [ -n "$$out" ]; then echo "Unformatted files:"; echo "$$out" | sort -u; exit 1; fi
 
 test: ## Unit tests
 	go test ./...
@@ -59,11 +67,14 @@ coverage: ## Race-enabled tests with a coverage floor
 	echo "Total coverage: $$total% (minimum $(COVERAGE_MIN)%)"; \
 	awk -v t="$$total" -v m="$(COVERAGE_MIN)" 'BEGIN { exit (t + 0 < m + 0) }' || { echo "Coverage below $(COVERAGE_MIN)%"; exit 1; }
 
+vuln: ## Check dependencies for known vulnerabilities (govulncheck)
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 smoke: build ## Build and run the binary's --help and --version
 	./bin/$(BIN) --help >/dev/null
 	./bin/$(BIN) --version
 
-ci: fmt-check lint coverage build ## Everything CI runs
+ci: fmt-check lint coverage vuln build ## Everything CI runs
 
 clean: ## Remove build and coverage output
 	rm -rf bin/ dist/ coverage.out coverage.html

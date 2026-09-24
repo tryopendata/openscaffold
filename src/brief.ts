@@ -1,6 +1,9 @@
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
+import { toolOnPath } from "./compose.js";
+import { applyConditionals, type ConditionContext } from "./conditionals.js";
 import { SANDBOX_SKIPPED_TAGS, type VerifyStep } from "./schema/index.js";
 import type { ComposedPlan, Entry } from "./types.js";
+import { VERSION } from "./version.js";
 
 /** Where `add` puts openscaffold's version of files that already existed. */
 export const INCOMING_DIR = ".openscaffold/incoming";
@@ -10,6 +13,10 @@ export interface InvocationContext {
   script?: string;
   /** Set when running under bun (process.versions.bun). */
   bun?: boolean;
+  /** This CLI's version, pinned in the npx form. */
+  version?: string;
+  /** PATH lookup (default: toolOnPath). */
+  onPath?: (bin: string) => boolean;
 }
 
 function shellQuote(s: string): string {
@@ -17,16 +24,23 @@ function shellQuote(s: string): string {
 }
 
 /**
- * The command an agent should use to call this same CLI: `npx openscaffold` when running from
- * an installed package, otherwise the runtime plus the absolute path of the local checkout.
+ * The command an agent should use to call this same CLI:
+ * - `npx -y openscaffold@<version>` when running from a package in node_modules (npx or a local
+ *   install), so `verify` runs with the CLI version that wrote the manifest;
+ * - bare `openscaffold` for a global install (the script is named openscaffold and is on PATH);
+ * - otherwise the runtime plus the absolute path of the local checkout.
  */
 export function cliInvocation(
   ctx: InvocationContext = { script: process.argv[1], bun: Boolean(process.versions.bun) },
 ): string {
+  const npx = `npx -y openscaffold@${ctx.version ?? VERSION}`;
   const script = ctx.script;
-  if (!script) return "npx openscaffold";
+  if (!script) return npx;
   const abs = isAbsolute(script) ? script : resolve(script);
-  if (/[\\/]node_modules[\\/]/.test(abs)) return "npx openscaffold";
+  if (/[\\/]node_modules[\\/]/.test(abs)) return npx;
+  if (basename(abs) === "openscaffold" && (ctx.onPath ?? toolOnPath)("openscaffold")) {
+    return "openscaffold";
+  }
   if (/\.[cm]?ts$/.test(abs)) return `bun ${shellQuote(abs)}`;
   return `${ctx.bun ? "bun" : "node"} ${shellQuote(abs)}`;
 }
@@ -86,7 +100,7 @@ function bullets(items: string[]): string {
   return items.map((i) => `- ${i}`).join("\n");
 }
 
-function entrySection(title: string, entry: Entry): string {
+function entrySection(title: string, entry: Entry, when: ConditionContext): string {
   const m = entry.meta;
   const facts: string[] = [];
   const deps = Object.entries(m.deps).filter(([, names]) => names.length);
@@ -102,7 +116,8 @@ function entrySection(title: string, entry: Entry): string {
   const parts = [`## ${title}`, m.description];
   if (facts.length) parts.push(bullets(facts));
   // Drop a leading "# <name>" heading: the section title already says it.
-  const body = entry.body.replace(/^#\s+(.+)\n+/, (whole, h: string) =>
+  const prose = applyConditionals(entry.body, when, `${entry.kind} ${entry.id}`);
+  const body = prose.replace(/^#\s+(.+)\n+/, (whole, h: string) =>
     h.trim().toLowerCase() === m.name.toLowerCase() ? "" : whole,
   );
   if (body) parts.push(nestHeadings(body, 3));
@@ -225,12 +240,21 @@ export function buildBrief(input: BriefInput): string {
     );
   }
 
-  // 6. Stack and fragment guidance.
+  // 6. Stack and fragment guidance, with conditional blocks resolved for this project.
+  const when: ConditionContext = {
+    stack: plan.stack?.id,
+    tags: plan.stack?.meta.tags ?? [],
+    mode: input.mode,
+    preset: plan.preset,
+    with: [...new Set([...(input.existingFragments ?? []), ...fragmentIds])],
+  };
   if (input.mode === "new" && plan.stack) {
-    out.push(entrySection(`Stack: ${plan.stack.meta.name} (${code(plan.stack.id)})`, plan.stack));
+    out.push(
+      entrySection(`Stack: ${plan.stack.meta.name} (${code(plan.stack.id)})`, plan.stack, when),
+    );
   }
   for (const f of plan.fragments) {
-    out.push(entrySection(`Fragment: ${f.meta.name} (${code(f.id)})`, f));
+    out.push(entrySection(`Fragment: ${f.meta.name} (${code(f.id)})`, f, when));
   }
 
   // 7. Merge needed (add).

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import YAML from "yaml";
 import { OpenScaffoldError } from "./errors.js";
+import { formatZodIssues } from "./registry/scan.js";
 import {
   type Manifest,
   ManifestSchema,
@@ -70,10 +71,11 @@ export function readManifest(projectDir: string): Manifest | undefined {
   }
   const parsed = ManifestSchema.safeParse(raw);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`)
-      .join("\n");
-    throw new OpenScaffoldError("manifest_invalid", `${path} is invalid:\n${issues}`, hint);
+    throw new OpenScaffoldError(
+      "manifest_invalid",
+      `${path} is invalid: ${formatZodIssues(parsed.error)}`,
+      hint,
+    );
   }
   return parsed.data;
 }

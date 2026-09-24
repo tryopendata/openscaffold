@@ -1,8 +1,7 @@
 import type { AgentId, FragmentMeta, StackMeta, VerifyStep } from "./schema/index.js";
 
 /** Where an entry was resolved from, highest precedence first. */
-export const ORIGINS = ["project", "user", "registry", "bundled"] as const;
-export type Origin = (typeof ORIGINS)[number];
+export type Origin = "project" | "user" | "registry" | "bundled";
 
 export interface Entry<M extends StackMeta | FragmentMeta = StackMeta | FragmentMeta> {
   kind: M["kind"];
@@ -49,6 +48,12 @@ export interface ComposeInput {
   always: string[];
   /** Fragments already applied (from an existing manifest); not re-emitted but satisfy requires. */
   existing?: string[];
+  /**
+   * "add": select only `with` plus their requires (no stack defaults, no `always`). The stack is
+   * used only for applies_to matching and contributes no files, steps, env, decisions, or tools.
+   * Default "new".
+   */
+  mode?: "new" | "add";
 }
 
 export interface ComposedPlan {

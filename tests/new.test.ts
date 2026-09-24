@@ -140,6 +140,28 @@ describe("runNew", () => {
     });
   });
 
+  it("suggests deleting a half-finished scaffold instead of running add", async () => {
+    mkdirSync(join(sb.cwd, "half", ".openscaffold"), { recursive: true });
+    writeFileSync(join(sb.cwd, "half", ".openscaffold", "BRIEF.md"), "x");
+    await expect(runNew({ ...sb.opts, stack: "app", dir: "half" })).rejects.toMatchObject({
+      code: "target_not_empty",
+      hint: expect.stringMatching(/delete .* and re-run `openscaffold new`/),
+    });
+
+    mkdirSync(join(sb.cwd, "partial", "scripts"), { recursive: true });
+    writeFileSync(join(sb.cwd, "partial", "README.md"), "# partial\n");
+    writeFileSync(join(sb.cwd, "partial", "scripts", "hook.sh"), "");
+    await expect(runNew({ ...sb.opts, stack: "app", dir: "partial" })).rejects.toMatchObject({
+      hint: expect.stringContaining("re-run `openscaffold new`"),
+    });
+
+    // A finished scaffold (has a manifest) gets the add hint.
+    await runNew({ ...sb.opts, stack: "app", dir: "done" });
+    await expect(runNew({ ...sb.opts, stack: "app", dir: "done" })).rejects.toMatchObject({
+      hint: expect.stringContaining("openscaffold add"),
+    });
+  });
+
   it("prints the documented --json shape and never launches", async () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {

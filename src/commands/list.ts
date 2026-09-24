@@ -76,14 +76,15 @@ export function register(program: Command): void {
     .description("List available stacks and fragments")
     .option("--kind <kind>", "only stack or fragment")
     .option("--json", "print as JSON")
-    .action(async (options: { kind?: string; json?: boolean }) => {
+    .option("--offline", "don't fetch the registry; use cached and bundled entries")
+    .action(async (options: { kind?: string; json?: boolean; offline?: boolean }) => {
       if (options.kind !== undefined && options.kind !== "stack" && options.kind !== "fragment") {
         throw new OpenScaffoldError(
           "bad_option",
           `--kind must be "stack" or "fragment", not "${options.kind}"`,
         );
       }
-      const registry = await loadRegistry({ cwd: process.cwd() });
+      const registry = await loadRegistry({ cwd: process.cwd(), offline: options.offline });
       for (const w of registry.warnings) warn(w);
       const items = registry.list(options.kind as EntryKind | undefined).map(toListItem);
       if (options.json) printJson(items);

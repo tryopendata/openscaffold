@@ -1,4 +1,4 @@
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Command } from "commander";
 import { buildBrief, cliInvocation, INCOMING_DIR } from "../brief.js";
@@ -6,8 +6,8 @@ import { compose } from "../compose.js";
 import { loadUserConfig } from "../config.js";
 import { OpenScaffoldError } from "../errors.js";
 import type { HandoffDecision } from "../handoff.js";
-import { hashVerify, readManifest, writeManifest } from "../manifest.js";
-import { printJson } from "../output.js";
+import { hashVerify, MANIFEST_PATH, readManifest, writeManifest } from "../manifest.js";
+import { printJson, println, warn } from "../output.js";
 import { loadRegistry } from "../registry/index.js";
 import { renderFiles } from "../render.js";
 import {
@@ -21,7 +21,6 @@ import {
   writeBrief,
 } from "../scaffold.js";
 import { type Manifest, SCHEMA_VERSION, TEMPLATE_VARS } from "../schema/index.js";
-import type { ComposedPlan } from "../types.js";
 import { buildVars, inferProjectName } from "../vars.js";
 import { VERSION } from "../version.js";
 
@@ -50,29 +49,24 @@ export interface AddResult {
   agentExit?: number;
 }
 
-/** Keep only what the newly added fragments contribute (compose re-emits the stack's own parts). */
-function onlyNewFragments(plan: ComposedPlan): ComposedPlan {
-  const ids = new Set(plan.fragments.map((f) => f.id));
-  const stackId = plan.stack?.id;
-  return {
-    ...plan,
-    files: plan.files.filter((f) => ids.has(f.owner)),
-    verify: plan.verify.filter((s) => ids.has(s.owner)),
-    env: Object.fromEntries(
-      Object.entries(plan.env).filter(([k]) => plan.fragments.some((f) => k in f.meta.env)),
-    ),
-    decisions: plan.decisions.filter((d) => [...ids].some((id) => d.startsWith(`${id}: `))),
-    missingTools: plan.missingTools.filter((t) => ids.has(t.owner)),
-    warnings: plan.warnings.filter((w) => !stackId || !w.startsWith(`${stackId} needs `)),
-  };
+/** Files under `dir`, relative to it and "/"-separated. Empty when `dir` doesn't exist. */
+function listFiles(dir: string, prefix = ""): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...listFiles(join(dir, entry.name), rel));
+    else out.push(rel);
+  }
+  return out.sort();
 }
 
 /** `openscaffold add`: apply fragments to an existing project and hand off to an agent. */
 export async function runAdd(opts: AddOptions): Promise<AddResult> {
   const cwd = opts.cwd ?? process.cwd();
   const dir = resolve(cwd, opts.dir ?? ".");
-  const warnLine = opts.warn ?? ((l: string) => process.stderr.write(`warning: ${l}\n`));
-  const print = opts.print ?? ((l: string) => process.stdout.write(`${l}\n`));
+  const warnLine = opts.warn ?? warn;
+  const print = opts.print ?? println;
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     throw new OpenScaffoldError(
       "target_missing",
@@ -98,6 +92,7 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
   });
   const manifest = readManifest(dir);
   const warnings = [...registry.warnings];
+  const preset = manifest?.preset ?? config.preset;
 
   let stackId = manifest?.stack ?? undefined;
   if (stackId && !registry.get("stack", stackId)) {
@@ -107,20 +102,20 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     stackId = undefined;
   }
   const agents = resolveAgents(opts.agents, detected(opts), config.agents, manifest?.agents ?? []);
-  const composed = compose(
+  const plan = compose(
     registry,
     {
       stackId,
+      mode: "add",
       with: requested,
       without: [],
-      sandbox: manifest?.preset === "sandbox",
+      sandbox: preset === "sandbox",
       agents,
       always: [],
       existing: manifest?.fragments ?? [],
     },
     { hasTool: opts.hasTool },
   );
-  const plan = onlyNewFragments(composed);
   warnings.push(...plan.warnings);
   if (plan.fragments.length === 0) {
     throw new OpenScaffoldError(
@@ -151,6 +146,27 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     }
     env[k] = v;
   }
+  // A manifest whose steps no longer match their hash was edited by hand. Warn like `verify`
+  // does, and keep verify_hash as it was: re-hashing here would bless the edit. The appended
+  // steps then also differ from the stored hash, so `verify` keeps warning until someone
+  // restores the generated steps. (The originally generated steps can't be recovered to hash
+  // them plus the new ones, so leaving the stale hash is the only way to keep the edit visible.)
+  const tampered = manifest !== undefined && hashVerify(manifest.verify) !== manifest.verify_hash;
+  if (tampered) {
+    warnings.push(
+      `the verify steps in ${MANIFEST_PATH} were edited since openscaffold generated them. Weakening or removing a step to make verify pass counts as a failure; fix the code instead`,
+    );
+  }
+
+  // Files parked under incoming/ by an earlier run that nobody reconciled. Keep them; this run
+  // only overwrites the paths it writes itself.
+  const incoming = join(dir, INCOMING_DIR);
+  const leftover = listFiles(incoming).filter((f) => !plan.files.some((op) => op.dest === f));
+  if (leftover.length) {
+    warnings.push(
+      `${INCOMING_DIR}/ still has files from an earlier run that haven't been reconciled (${leftover.join(", ")}); they're kept and listed in the brief`,
+    );
+  }
   if (!opts.json) for (const w of warnings) warnLine(w);
 
   const inferred = buildVars({
@@ -162,9 +178,8 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
   });
   const vars = { ...inferred, ...(manifest?.vars ?? {}) };
   for (const key of Object.keys(vars)) if (!TEMPLATE_VARS.includes(key)) delete vars[key];
-  const incoming = join(dir, INCOMING_DIR);
-  rmSync(incoming, { recursive: true, force: true });
   const { written, skipped } = renderFiles(plan.files, dir, vars, { incomingDir: incoming });
+  const mergeNeeded = [...skipped, ...leftover];
 
   const now = (opts.now ?? new Date()).toISOString();
   const verify = [...existingSteps, ...newSteps];
@@ -172,13 +187,13 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     openscaffold: VERSION,
     schema_version: SCHEMA_VERSION,
     stack: stackId ?? manifest?.stack ?? null,
-    preset: manifest?.preset ?? config.preset,
+    preset,
     agents: [...new Set([...(manifest?.agents ?? []), ...plan.agents])],
     fragments: [...(manifest?.fragments ?? []), ...plan.fragments.map((f) => f.id)],
     vars: { ...(manifest?.vars ?? {}), ...vars },
     env,
     verify,
-    verify_hash: hashVerify(verify),
+    verify_hash: tampered ? (manifest?.verify_hash ?? "") : hashVerify(verify),
     created: manifest?.created ?? now,
     updated: now,
   };
@@ -194,7 +209,7 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
       plan,
       existingFragments: manifest?.fragments ?? [],
       written,
-      mergeNeeded: skipped,
+      mergeNeeded,
       yes: Boolean(opts.yes) || next.preset === "sandbox",
       verify,
       env,
@@ -220,7 +235,7 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     fragments: next.fragments,
     agents: next.agents,
     written,
-    mergeNeeded: skipped,
+    mergeNeeded,
     warnings,
     missingTools: plan.missingTools,
     manifestCreated: manifest === undefined,

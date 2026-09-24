@@ -121,7 +121,7 @@ npx openscaffold new python-react scratch --sandbox
 npx openscaffold add agent-ops ci-github
 ```
 
-It never overwrites a file. Anything that already exists is listed in the brief as "merge needed," and the agent reconciles it with what's there. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
+It never overwrites a file. When a file already exists, openscaffold's version goes to `.openscaffold/incoming/` instead, and the brief lists it as "merge needed" so the agent can reconcile the two. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
 
 ## Verify
 
@@ -129,7 +129,7 @@ It never overwrites a file. Anything that already exists is listed in the brief 
 npx openscaffold verify
 ```
 
-Each stack and fragment declares the steps that prove the project works: install, lint, typecheck, test, build, and dev servers that must answer an HTTP probe. `verify` runs them in phases (setup, check, serve, teardown), kills anything it started, and exits non-zero on any failure. The brief tells the agent that weakening a step to make it pass counts as a failure, and `verify` warns when the steps in `manifest.yaml` no longer match what openscaffold generated.
+Each stack and fragment declares the steps that prove the project works: install, lint, typecheck, test, build, and dev servers that must answer an HTTP probe. `verify` runs them in phases (setup, check, serve, teardown), stops each dev server after its probe, runs teardown steps even after a failure (services started in setup stay up until then), and exits non-zero on any failure. The brief tells the agent that weakening a step to make it pass counts as a failure, and `verify` warns when the steps in `manifest.yaml` no longer match what openscaffold generated.
 
 Useful flags: `--json` for machine-readable output, `--only test`, `--skip-tag prod`, and `--all` to include steps a sandbox project skips.
 

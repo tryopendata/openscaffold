@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -263,6 +264,77 @@ describe("runVerify", () => {
     expect(api?.outputTail).toContain("boom");
   });
 
+  it("fails a serve step at once when its probe URL can't be expanded or parsed", async () => {
+    const dir = project([
+      {
+        name: "api",
+        run: "touch started; sleep 30",
+        phase: "serve",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} is verify env syntax
+        expect: { http: "http://127.0.0.1:${PORT_NOPE}/", within: "30s" },
+      },
+      {
+        name: "web",
+        run: "sleep 30",
+        phase: "serve",
+        expect: { http: "not a url", within: "30s" },
+      },
+    ]);
+    const start = Date.now();
+    const r = await runVerify({ projectDir: dir, env: { PATH: process.env.PATH } });
+    expect(Date.now() - start).toBeLessThan(3000);
+    expect(byName(r, "api")?.status).toBe("failed");
+    expect(byName(r, "api")?.reason).toContain("PORT_NOPE");
+    expect(byName(r, "web")?.status).toBe("failed");
+    expect(byName(r, "web")?.reason).toContain("not a valid");
+    expect(existsSync(join(dir, "started"))).toBe(false);
+  });
+
+  it("fails a serve step at once when something already answers on its URL", async () => {
+    const port = await freePort();
+    const server = createHttpServer((_req, res) => res.end("stale"));
+    await new Promise<void>((ok) => server.listen(port, "127.0.0.1", ok));
+    try {
+      const dir = project(
+        [
+          {
+            name: "web",
+            run: "touch started; sleep 30",
+            phase: "serve",
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} is verify env syntax
+            expect: { http: "http://127.0.0.1:${PORT_WEB}/", within: "30s" },
+          },
+        ],
+        { env: { PORT_WEB: String(port) } },
+      );
+      const r = await runVerify({ projectDir: dir });
+      const web = byName(r, "web");
+      expect(web?.status).toBe("failed");
+      expect(web?.reason).toContain(`something is already listening on http://127.0.0.1:${port}/`);
+      expect(web?.reason).toContain("PORT_WEB");
+      expect(existsSync(join(dir, "started"))).toBe(false);
+    } finally {
+      await new Promise((ok) => server.close(ok));
+    }
+  });
+
+  it("explains a serve command that exits 0 before the probe succeeds (daemonized)", async () => {
+    const port = await freePort();
+    const dir = project([
+      {
+        name: "api",
+        run: "echo detached",
+        phase: "serve",
+        expect: { http: `http://127.0.0.1:${port}/`, within: "30s" },
+      },
+    ]);
+    const r = await runVerify({ projectDir: dir });
+    const api = byName(r, "api");
+    expect(api?.status).toBe("failed");
+    expect(api?.reason).toMatch(/daemonized|background/);
+    expect(api?.reason).toContain("foreground");
+  });
+
   it("does not hang on a check step that leaves a background process holding its output", async () => {
     const dir = project([{ name: "leaky", run: "sleep 30 & echo started" }]);
     const start = Date.now();
@@ -305,6 +377,31 @@ describe("verify command", () => {
     expect(JSON.parse(json.stdout).totals).toEqual({ passed: 1, failed: 1, skipped: 0 });
   });
 
+  it("accepts comma-separated --only and --skip-tag lists", async () => {
+    const dir = project([
+      { name: "lint", run: "true" },
+      { name: "types", run: "true" },
+      { name: "slow", run: "true", tags: ["slow"] },
+      { name: "e2e", run: "true", tags: ["e2e"] },
+      { name: "test", run: "exit 1" },
+    ]);
+    const only = await execa(
+      "bun",
+      [CLI, "verify", "--dir", dir, "--json", "--only", "lint,types"],
+      {
+        reject: false,
+      },
+    );
+    expect(only.exitCode).toBe(0);
+    expect(JSON.parse(only.stdout).totals).toEqual({ passed: 2, failed: 0, skipped: 3 });
+    const skip = await execa(
+      "bun",
+      [CLI, "verify", "--dir", dir, "--json", "--skip-tag", "slow,e2e", "--only", "slow,lint"],
+      { reject: false },
+    );
+    expect(JSON.parse(skip.stdout).totals).toEqual({ passed: 1, failed: 0, skipped: 4 });
+  });
+
   it("on SIGINT kills the running step and still runs teardown", async () => {
     const dir = project([
       { name: "hang", run: "sleep 30 & echo $! > sleep.pid; wait" },
@@ -316,7 +413,7 @@ describe("verify command", () => {
     }
     child.kill("SIGINT");
     const res = await child;
-    expect(res.exitCode).toBe(1);
+    expect(res.exitCode).toBe(130);
     expect(existsSync(join(dir, "torn-down"))).toBe(true);
     const pid = Number(readFileSync(join(dir, "sleep.pid"), "utf8"));
     expect(alive(pid)).toBe(false);

@@ -1,12 +1,10 @@
 # {{project_name}}
 
-<!-- One or two sentences on what this tool does and who it's for. -->
+<!-- openscaffold:fill One or two sentences on what this tool does and who it's for. -->
 
 ## Install
 
-```bash
-go install <module path>/cmd/{{project_slug}}@latest
-```
+<!-- openscaffold:fill A bash code block with `go install <module path>/cmd/{{project_slug}}@latest`, using the real module path from go.mod. -->
 
 Or build from source:
 
@@ -22,7 +20,7 @@ make build
 {{project_slug}} --version
 ```
 
-<!-- Add the main workflows here: the two or three commands people run most. -->
+<!-- openscaffold:fill The two or three commands people run most, with one line each on what they do. -->
 
 Every command accepts `--json` for machine-readable output. See [docs/configuration.md](docs/configuration.md) for config files, environment variables, and flags.
 
@@ -36,6 +34,7 @@ Requires Go, make, and [golangci-lint](https://golangci-lint.run/).
 | `make test` | Unit tests |
 | `make test-integration` | Integration tests against the built binary |
 | `make lint` | golangci-lint |
+| `make vuln` | govulncheck |
 | `make coverage` | Race-enabled tests with a coverage floor |
 | `make ci` | Everything CI runs |
 

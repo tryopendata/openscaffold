@@ -1,8 +1,9 @@
-import { accessSync, constants, readdirSync, statSync } from "node:fs";
-import { delimiter, join, relative, sep } from "node:path";
+import { accessSync, constants, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { listEntryFiles } from "./entry-files.js";
 import { OpenScaffoldError } from "./errors.js";
 import type { Registry } from "./registry/index.js";
-import { type AgentId, SANDBOX_EXCLUDED_CATEGORIES } from "./schema/index.js";
+import { SANDBOX_EXCLUDED_CATEGORIES } from "./schema/index.js";
 import type {
   ComposedPlan,
   ComposeInput,
@@ -13,52 +14,7 @@ import type {
   StackEntry,
 } from "./types.js";
 
-const IGNORED_FILES = new Set([".DS_Store", "Thumbs.db"]);
-
-/** One file an entry ships, before ownership resolution. */
-export interface EntryFile {
-  /** Absolute source path. */
-  src: string;
-  /** Destination relative to the project root, .tmpl stripped, always "/"-separated. */
-  dest: string;
-  template: boolean;
-  /** Set when the file comes from adapters/<agent>/. */
-  agent?: AgentId;
-}
-
-function walk(dir: string): string[] {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const out: string[] = [];
-  for (const name of names.sort()) {
-    if (IGNORED_FILES.has(name)) continue;
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) out.push(...walk(path));
-    else out.push(path);
-  }
-  return out;
-}
-
-function toEntryFile(base: string, src: string, agent?: AgentId): EntryFile {
-  const rel = relative(base, src).split(sep).join("/");
-  const template = rel.endsWith(".tmpl");
-  return { src, dest: template ? rel.slice(0, -".tmpl".length) : rel, template, agent };
-}
-
-/** Files an entry would write: files/ for everyone plus adapters/<agent>/ for each target agent. */
-export function listEntryFiles(entryDir: string, agents: readonly AgentId[]): EntryFile[] {
-  const filesDir = join(entryDir, "files");
-  const out = walk(filesDir).map((src) => toEntryFile(filesDir, src));
-  for (const agent of agents) {
-    const adapterDir = join(entryDir, "adapters", agent);
-    out.push(...walk(adapterDir).map((src) => toEntryFile(adapterDir, src, agent)));
-  }
-  return out;
-}
+export { type EntryFile, listEntryFiles } from "./entry-files.js";
 
 /** True when an executable named `tool` is on PATH. Never spawns a process. */
 export function toolOnPath(tool: string): boolean {
@@ -127,6 +83,7 @@ export function compose(
   const existing = new Set(input.existing ?? []);
   const without = new Set(input.without);
   const explicitWith = new Set(input.with);
+  const addMode = input.mode === "add";
 
   for (const id of explicitWith) {
     if (without.has(id)) {
@@ -145,6 +102,8 @@ export function compose(
     selected.set(fragment.id, fragment);
   };
   const stackLabel = stack ? `stack ${stack.id}` : "";
+  /** Sandbox-dropped fragments, with the index of their "dropped" warning. */
+  const dropped = new Map<string, number>();
   const dropForSandbox = (fragment: FragmentEntry, explicit: boolean): boolean => {
     if (!input.sandbox || !SANDBOX_EXCLUDED_CATEGORIES.includes(fragment.meta.category)) {
       return false;
@@ -155,18 +114,20 @@ export function compose(
       );
       return false;
     }
+    dropped.set(fragment.id, warnings.length);
     warnings.push(
       `dropped ${fragment.id}: --sandbox skips ${fragment.meta.category} fragments (add --with ${fragment.id} to keep it)`,
     );
     return true;
   };
 
-  for (const id of stack?.meta.fragments.default ?? []) {
+  // `add` applies only what was asked for; the stack's defaults were decided at `new` time.
+  for (const id of addMode ? [] : (stack?.meta.fragments.default ?? [])) {
     if (without.has(id) || explicitWith.has(id)) continue;
     const fragment = registry.fragment(id);
     if (!dropForSandbox(fragment, false)) select(fragment);
   }
-  for (const id of input.always) {
+  for (const id of addMode ? [] : input.always) {
     if (without.has(id) || explicitWith.has(id)) continue;
     const fragment = registry.fragment(id);
     if (!appliesTo(fragment, stack)) {
@@ -205,6 +166,13 @@ export function compose(
         );
       }
       const required = registry.fragment(req);
+      if (input.sandbox && SANDBOX_EXCLUDED_CATEGORIES.includes(required.meta.category)) {
+        const at = dropped.get(req);
+        if (at !== undefined) warnings.splice(at, 1, "");
+        warnings.push(
+          `kept ${req} because ${fragment.id} requires it (--sandbox normally drops ${required.meta.category} fragments)`,
+        );
+      }
       selected.set(req, required);
       queue.push(required);
     }
@@ -226,7 +194,9 @@ export function compose(
   }
 
   const fragments = orderFragments(selected);
-  const entries: Entry[] = [...(stack ? [stack] : []), ...fragments];
+  // In add mode the stack's parts are already in the project, so only new fragments contribute
+  // (and only they can collide with each other; a path the stack wrote exists and gets parked).
+  const entries: Entry[] = [...(stack && !addMode ? [stack] : []), ...fragments];
 
   // Files and ownership.
   const byDest = new Map<string, FileOp[]>();
@@ -296,11 +266,11 @@ export function compose(
 
   // Decisions.
   const decisions = [
-    ...(stack?.meta.decisions ?? []),
+    ...(stack && !addMode ? stack.meta.decisions : []),
     ...fragments.flatMap((f) => f.meta.decisions.map((d) => `${f.id}: ${d}`)),
   ];
 
-  // Tools.
+  // Tools: one warning per missing tool, naming every entry that needs it.
   const hasTool = opts.hasTool ?? toolOnPath;
   const missingTools: ComposedPlan["missingTools"] = [];
   const checked = new Map<string, boolean>();
@@ -308,23 +278,24 @@ export function compose(
     if (!checked.has(tool)) checked.set(tool, hasTool(tool));
     return checked.get(tool) as boolean;
   };
-  if (stack) {
-    for (const tool of stack.meta.tools) {
-      if (check(tool)) continue;
-      missingTools.push({ owner: stack.id, tool });
-      warnings.push(
-        `${stack.id} needs ${tool}, which isn't on PATH; install it before running verify`,
-      );
+  for (const entry of entries) {
+    const tools =
+      entry.kind === "fragment"
+        ? [...(entry as FragmentEntry).meta.requires_tools, ...entry.meta.tools]
+        : entry.meta.tools;
+    for (const tool of new Set(tools)) {
+      if (!check(tool)) missingTools.push({ owner: entry.id, tool });
     }
   }
-  for (const fragment of fragments) {
-    for (const tool of new Set([...fragment.meta.requires_tools, ...fragment.meta.tools])) {
-      if (check(tool)) continue;
-      missingTools.push({ owner: fragment.id, tool });
-      warnings.push(
-        `${fragment.id} needs ${tool}, which isn't on PATH; install it or rerun with --without ${fragment.id}`,
-      );
-    }
+  for (const tool of new Set(missingTools.map((t) => t.tool))) {
+    const owners = missingTools.filter((t) => t.tool === tool).map((t) => t.owner);
+    const droppable = owners.filter((o) => o !== stack?.id);
+    const fix = droppable.length
+      ? `install it or rerun with ${droppable.map((o) => `--without ${o}`).join(" ")}`
+      : "install it before running verify";
+    warnings.push(
+      `${owners.join(", ")} ${owners.length === 1 ? "needs" : "need"} ${tool}, which isn't on PATH; ${fix}`,
+    );
   }
 
   return {
@@ -336,7 +307,7 @@ export function compose(
     verify,
     env,
     decisions,
-    warnings,
+    warnings: warnings.filter(Boolean),
     missingTools,
   };
 }

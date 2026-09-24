@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import { toolOnPath } from "./compose.js";
 import { AGENTS, type AgentId } from "./schema/index.js";
 
@@ -65,7 +66,8 @@ export function agentPrompt(verifyCommand: string): string {
 export type HandoffDecision =
   | { kind: "inside-agent"; agent: DetectedAgent }
   | { kind: "launch"; agent: AgentId; bin: string; args: string[] }
-  | { kind: "print"; reason: string };
+  /** `agent`: the --agent or first config agent, used in the printed example command. */
+  | { kind: "print"; reason: string; agent?: AgentId };
 
 export interface HandoffOptions {
   env?: NodeJS.ProcessEnv;
@@ -87,15 +89,17 @@ export interface HandoffOptions {
 export function decideHandoff(opts: HandoffOptions): HandoffDecision {
   const inside = detectAgent(opts.env ?? process.env);
   if (inside) return { kind: "inside-agent", agent: inside };
-  if (opts.json) return { kind: "print", reason: "--json never launches an agent" };
-  if (opts.launch === false) return { kind: "print", reason: "--no-launch" };
-  if (!opts.isTTY) return { kind: "print", reason: "stdout is not a terminal" };
-  if (!opts.trusted) {
-    return {
-      kind: "print",
-      reason: "the plan includes untrusted entries, so nothing is auto-launched",
-    };
-  }
+  const suggested = opts.preferred ?? opts.configAgents?.[0];
+  const print = (reason: string): HandoffDecision => ({
+    kind: "print",
+    reason,
+    ...(suggested ? { agent: suggested } : {}),
+  });
+  if (opts.json) return print("--json never launches an agent");
+  if (opts.launch === false) return print("--no-launch");
+  if (!opts.isTTY) return print("stdout is not a terminal");
+  if (!opts.trusted)
+    return print("the plan includes untrusted entries, so nothing is auto-launched");
   const hasBinary = opts.hasBinary ?? toolOnPath;
   const order = opts.preferred
     ? [opts.preferred]
@@ -119,16 +123,16 @@ export function decideHandoff(opts: HandoffOptions): HandoffDecision {
       };
     }
   }
-  return {
-    kind: "print",
-    reason: opts.preferred
+  return print(
+    opts.preferred
       ? `${AGENT_BINARIES[opts.preferred].join(" / ")} isn't on PATH`
       : "no agent CLI (claude, codex, opencode, cursor-agent) found on PATH",
-  };
+  );
 }
 
+/** Quote a shell word only when it needs it. */
 function quote(s: string): string {
-  return `"${s.replace(/(["\\$`])/g, "\\$1")}"`;
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
 /** Text telling the reader what to do next. `dir` is how to reach the project from here. */
@@ -145,24 +149,55 @@ export function handoffMessage(
       ].join("\n");
     case "launch":
       return `Launching ${decision.bin} in ${ctx.dir} to build it from the brief...`;
-    case "print":
+    case "print": {
+      const agent = decision.agent ?? "claude";
+      const command = [AGENT_BINARIES[agent][0] ?? agent, ...launchArgs(agent, prompt)]
+        .map(quote)
+        .join(" ");
       return [
         `Next: open ${ctx.dir === "." ? "this directory" : ctx.dir} in your coding agent and give it this prompt:`,
         "",
         `  ${prompt}`,
         "",
-        `For example: ${ctx.dir === "." ? "" : `cd ${ctx.dir} && `}claude ${quote(prompt)}`,
+        `For example: ${ctx.dir === "." ? "" : `cd ${quote(ctx.dir)} && `}${command}`,
         `The brief is at ${ctx.briefPath}.`,
       ].join("\n");
+    }
   }
 }
 
 /** Spawn an interactive agent. Resolves with its exit code. Injected in tests. */
 export type SpawnAgent = (bin: string, args: string[], cwd: string) => Promise<number>;
 
+/**
+ * Runs the agent in the foreground on the inherited TTY. While it runs, SIGINT and SIGQUIT are
+ * ignored here (the terminal already delivers them to the agent, which decides what they mean)
+ * and SIGTERM/SIGHUP are forwarded to it, so openscaffold never exits and leaves the agent
+ * orphaned on the terminal. A signal death resolves as 128 + the signal number.
+ */
 export const spawnAgent: SpawnAgent = (bin, args, cwd) =>
   new Promise((resolveExit, reject) => {
     const child = spawn(bin, args, { cwd, stdio: "inherit" });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolveExit(code ?? (signal ? 1 : 0)));
+    const ignore = () => {};
+    const forward = (signal: NodeJS.Signals) => {
+      child.kill(signal);
+    };
+    const handlers: [NodeJS.Signals, (s: NodeJS.Signals) => void][] = [
+      ["SIGINT", ignore],
+      ["SIGQUIT", ignore],
+      ["SIGTERM", forward],
+      ["SIGHUP", forward],
+    ];
+    for (const [signal, handler] of handlers) process.on(signal, handler);
+    const cleanup = () => {
+      for (const [signal, handler] of handlers) process.off(signal, handler);
+    };
+    child.once("error", (err) => {
+      cleanup();
+      reject(err);
+    });
+    child.once("exit", (code, signal) => {
+      cleanup();
+      resolveExit(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 0));
+    });
   });

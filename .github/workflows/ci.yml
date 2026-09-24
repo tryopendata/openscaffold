@@ -31,3 +31,18 @@ jobs:
         run: |
           node dist/cli.js --version
           node dist/cli.js list --json > /dev/null
+
+  # The Claude Code hooks target stock macOS bash 3.2 (/bin/bash). The hook
+  # tests run under /bin/bash as well as the bash on PATH.
+  hooks-macos:
+    runs-on: macos-latest
+    env:
+      OPENSCAFFOLD_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: bun install --frozen-lockfile
+      # jq ships on the runner image; shellcheck exercises the lint-on-write path.
+      - run: command -v shellcheck || brew install shellcheck
+      - run: /bin/bash --version
+      - run: bunx vitest run tests/hooks.test.ts

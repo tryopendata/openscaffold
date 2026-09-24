@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -19,10 +22,23 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const HOOKS = fileURLToPath(
   new URL("../registry/fragments/agent-ops/adapters/claude/.claude/hooks/", import.meta.url),
 );
+const FRAGMENTS = fileURLToPath(new URL("../registry/fragments/", import.meta.url));
 
 const has = (cmd: string, args: string[] = ["--version"]) =>
   spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
-const hasBash = has("bash", ["-c", "exit 0"]);
+// The bash on PATH, plus /bin/bash when it is a different binary: on macOS that
+// is the stock bash 3.2 Claude Code users actually run the hooks with.
+function bashes(): string[] {
+  const found: string[] = [];
+  const onPath = spawnSync("sh", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim();
+  for (const b of [onPath, "/bin/bash"]) {
+    if (!b || !existsSync(b)) continue;
+    if (found.some((f) => realpathSync(f) === realpathSync(b))) continue;
+    found.push(b);
+  }
+  return found;
+}
+const BASHES = bashes();
 const hasJq = has("jq");
 const hasGit = has("git");
 const hasShellcheck = has("shellcheck");
@@ -33,12 +49,13 @@ interface HookResult {
   stderr: string;
 }
 
-function runHook(
+function runHookWith(
+  bash: string,
   name: string,
   payload: unknown,
   opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): HookResult {
-  const r = spawnSync("bash", [join(HOOKS, name)], {
+  const r = spawnSync(bash, [join(HOOKS, name)], {
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf8",
     cwd: opts.cwd,
@@ -118,7 +135,39 @@ afterAll(() => {
   for (const d of pathDirs) rmSync(d, { recursive: true, force: true });
 });
 
-describe.skipIf(!hasBash)("agent-ops hooks", () => {
+const git = (cwd: string, ...args: string[]) =>
+  spawnSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args],
+    { cwd, encoding: "utf8" },
+  );
+
+describe("agent-ops settings", () => {
+  const settingsOf = (fragment: string) =>
+    join(FRAGMENTS, fragment, "adapters/claude/.claude/settings.json");
+
+  it("has no wildcard rm deny rule that would block every absolute or home path", () => {
+    const s = JSON.parse(readFileSync(settingsOf("agent-ops"), "utf8"));
+    const deny: string[] = s.permissions.deny;
+    expect(deny).toContain("Bash(rm -rf /)");
+    expect(deny).toContain("Bash(rm -rf ~)");
+    for (const rule of deny) expect(rule).not.toMatch(/^Bash\(rm .*\*\)$/);
+  });
+
+  // Claude Code validates settings; an unrecognized key is at best ignored.
+  it.each(["agent-ops", "ce-plugin", "rr"])("%s settings.json has no private _keys", (fragment) => {
+    const s = JSON.parse(readFileSync(settingsOf(fragment), "utf8"));
+    expect(Object.keys(s).filter((k) => k.startsWith("_"))).toEqual([]);
+  });
+});
+
+describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (bash) => {
+  const runHook = (
+    name: string,
+    payload: unknown,
+    opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+  ) => runHookWith(bash, name, payload, opts);
+
   describe.skipIf(!hasJq)("block-destructive.sh", () => {
     it.each([
       "rm -rf /",
@@ -134,6 +183,11 @@ describe.skipIf(!hasBash)("agent-ops hooks", () => {
       "docker compose down -v",
       "npm publish",
       "cd /tmp && rm -rf ~/",
+      'rm -rf "$HOME"',
+      'rm -rf "/"',
+      'bash -c "rm -rf /"',
+      "sh -c 'cd /tmp; rm -rf ~'",
+      'echo "DROP TABLE users;" | psql',
     ])("denies %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);
@@ -153,6 +207,11 @@ describe.skipIf(!hasBash)("agent-ops hooks", () => {
       "npm publish --dry-run",
       "docker compose down",
       "find . -name '*.log'",
+      "rm -f out.txt && cd ..",
+      "rm build.log; ls /",
+      'git commit -m "drop table migration"',
+      "rm -rf /tmp/build-cache",
+      "rm -rf ~/scratch/old",
     ])("allows %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);
@@ -259,7 +318,36 @@ describe.skipIf(!hasBash)("agent-ops hooks", () => {
       expect(out.hookEventName).toBe("PostToolUse");
       expect(out.additionalContext).toMatch(/shellcheck found issues in bad\.sh/);
       expect(out.additionalContext).toMatch(/SC2086/);
+      // Every diagnostic line starts with the project-relative path.
+      const body = (out.additionalContext as string).split("\n").slice(1).filter(Boolean);
+      expect(body.length).toBeGreaterThan(0);
+      for (const line of body) expect(line).toMatch(/^bad\.sh:\d+:\d+: /);
     });
+
+    it.skipIf(!hasShellcheck)(
+      "relativizes paths when the project dir and file path differ by a symlink",
+      () => {
+        const link = join(mkdtempSync(join(tmpdir(), "hooks-link-")), "proj");
+        pathDirs.push(link);
+        symlinkSync(realpathSync(project), link);
+        for (const [dir, file] of [
+          [link, join(realpathSync(project), "bad.sh")],
+          [realpathSync(project), join(link, "bad.sh")],
+        ] as const) {
+          const r = runHook(
+            "lint-on-write.sh",
+            { tool_name: "Write", tool_input: { file_path: file } },
+            { env: { CLAUDE_PROJECT_DIR: dir } },
+          );
+          expect(r.code).toBe(0);
+          const ctx: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+          expect(ctx).toMatch(/^shellcheck found issues in bad\.sh\./);
+          for (const line of ctx.split("\n").slice(1).filter(Boolean)) {
+            expect(line).toMatch(/^bad\.sh:\d+:\d+: /);
+          }
+        }
+      },
+    );
   });
 
   describe("without jq on PATH", () => {
@@ -300,6 +388,21 @@ describe.skipIf(!hasBash)("agent-ops hooks", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toMatch(/Repo state: branch `.+`, \d+ changed file\(s\)\./);
     });
+
+    it("doesn't ask for a branch before the first commit, but does after it", () => {
+      const repo = mkdtempSync(join(tmpdir(), "hooks-fresh-"));
+      pathDirs.push(repo);
+      git(repo, "init", "-q", "-b", "main");
+      const start = () =>
+        runHook(
+          "session-start.sh",
+          { hook_event_name: "SessionStart", source: "startup" },
+          { env: { CLAUDE_PROJECT_DIR: repo } },
+        ).stdout;
+      expect(start()).not.toMatch(/create a branch/);
+      git(repo, "commit", "-q", "--allow-empty", "-m", "init");
+      expect(start()).toMatch(/create a branch/);
+    });
   });
 
   describe.skipIf(!hasGit)("format-changed.sh", () => {
@@ -312,6 +415,32 @@ describe.skipIf(!hasBash)("agent-ops hooks", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toBe("");
       expect(r.stderr).toBe("");
+    });
+
+    it("passes paths with spaces and non-ASCII characters to the formatter", () => {
+      const repo = mkdtempSync(join(tmpdir(), "hooks-fmt-"));
+      pathDirs.push(repo);
+      git(repo, "init", "-q");
+      const names = ["héllo.go", "with space.go", "plain.go"];
+      for (const n of names) writeFileSync(join(repo, n), "package main\n");
+      // A fake gofmt that records the files it was asked to format.
+      const bin = mkdtempSync(join(tmpdir(), "hooks-bin-"));
+      pathDirs.push(bin);
+      const log = join(bin, "gofmt.log");
+      writeFileSync(
+        join(bin, "gofmt"),
+        `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${log}'; done\n`,
+        { mode: 0o755 },
+      );
+      const PATH = `${bin}${delimiter}${pathWithout(LINTERS)}`;
+      const r = runHook(
+        "format-changed.sh",
+        { hook_event_name: "Stop", stop_hook_active: false },
+        { env: { PATH, CLAUDE_PROJECT_DIR: repo } },
+      );
+      expect(r.code).toBe(0);
+      const formatted = readFileSync(log, "utf8").split("\n").filter(Boolean);
+      for (const n of names) expect(formatted).toContain(join(repo, n));
     });
   });
 });
