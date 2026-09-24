@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "openscaffold": {
+      "type": "string",
+      "description": "CLI version that wrote this manifest"
+    },
+    "schema_version": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "stack": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "preset": {
+      "type": "string",
+      "enum": [
+        "default",
+        "sandbox"
+      ]
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex",
+          "opencode",
+          "cursor"
+        ]
+      }
+    },
+    "fragments": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+      }
+    },
+    "vars": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "env": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "verify": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "description": "Unique step name within the composed project"
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shell command, run from the project root (or cwd)"
+          },
+          "cwd": {
+            "description": "Directory relative to the project root",
+            "type": "string"
+          },
+          "phase": {
+            "default": "check",
+            "description": "setup -> check -> serve -> teardown",
+            "type": "string",
+            "enum": [
+              "setup",
+              "check",
+              "serve",
+              "teardown"
+            ]
+          },
+          "tags": {
+            "default": [],
+            "description": "e.g. [prod]; --sandbox skips prod",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expect": {
+            "description": "Required for serve steps: the probe that proves the server is up",
+            "type": "object",
+            "properties": {
+              "http": {
+                "type": "string",
+                "description": "URL to probe; ${VAR} is expanded from the verify env"
+              },
+              "within": {
+                "default": "60s",
+                "type": "string",
+                "pattern": "^\\d+(ms|s|m)$",
+                "description": "How long to wait, e.g. 90s"
+              }
+            },
+            "required": [
+              "http"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "run"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "verify_hash": {
+      "type": "string"
+    },
+    "created": {
+      "type": "string"
+    },
+    "updated": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "openscaffold",
+    "schema_version",
+    "stack",
+    "preset",
+    "agents",
+    "fragments",
+    "vars",
+    "verify",
+    "verify_hash",
+    "created",
+    "updated"
+  ],
+  "additionalProperties": false
+}

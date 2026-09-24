@@ -10,7 +10,7 @@
   "files": [
     "dist",
     "registry",
-    "skill",
+    "skills",
     "schema"
   ],
   "engines": {

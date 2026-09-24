@@ -1,0 +1,5 @@
+on: push
+jobs:
+  x:
+    steps:
+      - run: echo ${{ secrets.TOKEN }}

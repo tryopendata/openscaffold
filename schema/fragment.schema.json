@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "deps": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "tools": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decisions": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "env": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "verify": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "description": "Unique step name within the composed project"
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shell command, run from the project root (or cwd)"
+          },
+          "cwd": {
+            "description": "Directory relative to the project root",
+            "type": "string"
+          },
+          "phase": {
+            "default": "check",
+            "description": "setup -> check -> serve -> teardown",
+            "type": "string",
+            "enum": [
+              "setup",
+              "check",
+              "serve",
+              "teardown"
+            ]
+          },
+          "tags": {
+            "default": [],
+            "description": "e.g. [prod]; --sandbox skips prod",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expect": {
+            "description": "Required for serve steps: the probe that proves the server is up",
+            "type": "object",
+            "properties": {
+              "http": {
+                "type": "string",
+                "description": "URL to probe; ${VAR} is expanded from the verify env"
+              },
+              "within": {
+                "default": "60s",
+                "type": "string",
+                "pattern": "^\\d+(ms|s|m)$",
+                "description": "How long to wait, e.g. 90s"
+              }
+            },
+            "required": [
+              "http"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "run"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "merge": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "kind": {
+      "type": "string",
+      "const": "fragment"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "agent-ops",
+        "ci",
+        "deploy",
+        "release",
+        "service",
+        "vendor",
+        "tooling"
+      ]
+    },
+    "applies_to": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requires": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+      }
+    },
+    "conflicts": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+      }
+    },
+    "requires_tools": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "description",
+    "kind",
+    "category"
+  ],
+  "additionalProperties": false
+}

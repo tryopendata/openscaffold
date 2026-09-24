@@ -1,0 +1,265 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`BRIEF.md > add with merge-needed files 1`] = `
+"# Add lonely to repo
+
+- Stack: none recorded (existing repo)
+- Adding fragments: lonely
+- Preset: default
+- Target agents: claude, codex, opencode, cursor
+- Project root: the directory that contains this \`.openscaffold/\` folder. Run every command from there.
+
+This file is your task. openscaffold, a scaffolding CLI, copied a few starter files and wrote this brief. It did not install anything or run any generator; that's your job. Wherever the guidance below says \`openscaffold <cmd>\`, run \`npx openscaffold <cmd>\`.
+
+## Your job
+
+Apply the fragments described below to this existing project without breaking what's already here. You're done when \`npx openscaffold verify\` exits 0. Work through it autonomously; stop only for the decisions and missing tools called out below.
+
+## Versions
+
+- Nothing here pins a version, on purpose. Use the latest stable versions that work together.
+- Prefer each framework's official generator or init command over writing its files by hand.
+- Check current docs (the official site, \`--help\`, the package registry) before writing config or calling an API. Don't trust remembered flags, config keys, or APIs; they change between releases.
+- Don't pin to versions you remember. Let the package manager resolve them. Committing lockfiles is expected.
+
+## Ground rules
+
+- Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.
+- Keep \`AGENTS.md\` accurate. Every command it lists must be a real command this project exposes, and it should describe the project as it actually ends up.
+- Leave \`.openscaffold/manifest.yaml\` alone. Its \`verify\` block is the definition of done.
+
+## Fragment: Lonely (\`lonely\`)
+
+Writes a .gitignore and README.
+
+Add ignore rules.
+
+## Merge needed
+
+These files already existed, so openscaffold left them untouched and wrote its version to the same path under \`.openscaffold/incoming/\`. Reconcile each one: bring in what the incoming version adds (settings keys, hooks, sections, ignore patterns), keep the project's existing choices where the two conflict, and don't drop anything the project relies on. Delete \`.openscaffold/incoming/\` when you're done.
+
+- \`.gitignore\` (incoming: \`.openscaffold/incoming/.gitignore\`)
+- \`README.md\` (incoming: \`.openscaffold/incoming/README.md\`)
+
+## Definition of done
+
+The manifest has no verify steps yet, so \`npx openscaffold verify\` passes trivially. That doesn't prove anything: also run the project's own lint and test commands and make sure what you added works.
+
+Any command these steps call that doesn't exist yet (a Makefile target, a package script) is yours to create, and it must do real work.
+
+Loop: run \`npx openscaffold verify\`, fix what fails, and run it again until every step passes. Weakening or stubbing a step counts as failure, not success: that includes making a command a no-op, skipping or deleting tests, lowering thresholds, or editing the manifest.
+
+Once verify is green:
+1. Check that \`AGENTS.md\` matches the project as built (real commands, layout, testing approach) with no placeholders left.
+2. Commit everything with a conventional commit message (e.g. \`feat: add lonely\`).
+3. Give the user a short summary: what you built, the decisions you made, the exact command to run it (the dev server, for a web project), and anything they still need to do (accounts, secrets, installs).
+"
+`;
+
+exports[`BRIEF.md > new (default preset) 1`] = `
+"# Build demo: Fixture App
+
+- Stack: Fixture App (\`app\`)
+- Fragments: agent-ops, deploy, extra
+- Preset: default
+- Target agents: claude, codex, opencode, cursor
+- Project root: the directory that contains this \`.openscaffold/\` folder. Run every command from there.
+
+This file is your task. openscaffold, a scaffolding CLI, copied a few starter files and wrote this brief. It did not install anything or run any generator; that's your job. Wherever the guidance below says \`openscaffold <cmd>\`, run \`npx openscaffold <cmd>\`.
+
+## Your job
+
+Turn this directory into a working development environment for the stack described below. You're done when \`npx openscaffold verify\` exits 0. Work through it autonomously; stop only for the decisions and missing tools called out below.
+
+## Versions
+
+- Nothing here pins a version, on purpose. Use the latest stable versions that work together.
+- Prefer each framework's official generator or init command over writing its files by hand.
+- Check current docs (the official site, \`--help\`, the package registry) before writing config or calling an API. Don't trust remembered flags, config keys, or APIs; they change between releases.
+- Don't pin to versions you remember. Let the package manager resolve them. Committing lockfiles is expected.
+
+## Ground rules
+
+- Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.
+- openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.
+  - \`.github/workflows/ci.yml\`
+  - \`README.md\`
+  - \`scripts/hook.sh\`
+  - \`AGENTS.md\`
+  - \`.claude/hooks/check.sh\`
+  - \`.claude/settings.json\`
+- Keep \`AGENTS.md\` accurate. Every command it lists must be a real command this project exposes, and it should describe the project as it actually ends up.
+- Leave \`.openscaffold/manifest.yaml\` alone. Its \`verify\` block is the definition of done.
+- These tools weren't on PATH when openscaffold ran: \`frobnicate\` (needed by extra). Install them if you can do it without admin rights or an interactive prompt (e.g. the user's package manager or the tool's official installer). Otherwise tell the user exactly what to install and wait; verify can't pass without them.
+
+## Decisions
+
+Confirm these with the user before you start building. Ask once, in a single short message, and include each default so they can reply "defaults".
+
+- Project name (default: the directory name)
+- extra: Remote host (default: none)
+
+## Stack: Fixture App (\`app\`)
+
+A small web app fixture.
+
+- Dependencies (names only; install current versions):
+  - app: react
+  - dev: vitest
+- Tools: bun
+
+### Layout
+
+One package at the root.
+
+\`\`\`
+# not a heading
+\`\`\`
+
+## Fragment: Agent ops (\`agent-ops\`)
+
+AGENTS.md and Claude settings.
+
+### What to add
+
+Fill in AGENTS.md.
+
+## Fragment: Deploy (\`deploy\`)
+
+Deploy target.
+
+### What to add
+
+A deploy config.
+
+## Fragment: Extra tooling (\`extra\`)
+
+Adds a remote runner.
+
+- Tools: frobnicate
+
+### What to add
+
+A remote runner hook.
+
+## Definition of done
+
+\`npx openscaffold verify\` runs these steps from \`.openscaffold/manifest.yaml\`, in phase order (setup, check, serve, teardown). Serve steps start a dev server and poll the probe URL; the server is stopped afterwards.
+
+| Step | Phase | Command | Probe |
+|---|---|---|---|
+| install | setup | \`bun install\` |  |
+| test | check | \`bun test\` |  |
+| build | check | \`bun run build\` |  |
+| agents-md | check | \`test -s AGENTS.md\` |  |
+| deploy-check | check | \`true\` |  |
+| extra-check | check | \`true\` |  |
+| web | serve | \`bun run dev\` | http://localhost:\${PORT_WEB}/ within 30s |
+
+Environment defaults (verify passes these; override one by exporting it, e.g. when a port is taken): \`PORT_WEB=3000\`, \`PORT_RR=9000\`. Read ports from these variables rather than hard-coding them, and list them in \`.env.example\`.
+
+Any command these steps call that doesn't exist yet (a Makefile target, a package script) is yours to create, and it must do real work.
+
+Loop: run \`npx openscaffold verify\`, fix what fails, and run it again until every step passes. Weakening or stubbing a step counts as failure, not success: that includes making a command a no-op, skipping or deleting tests, lowering thresholds, or editing the manifest.
+
+Once verify is green:
+1. Check that \`AGENTS.md\` matches the project as built (real commands, layout, testing approach) with no placeholders left.
+2. Commit everything with a conventional commit message (e.g. \`feat: scaffold demo\`).
+3. Give the user a short summary: what you built, the decisions you made, the exact command to run it (the dev server, for a web project), and anything they still need to do (accounts, secrets, installs).
+"
+`;
+
+exports[`BRIEF.md > new --sandbox 1`] = `
+"# Build demo: Fixture App
+
+- Stack: Fixture App (\`app\`)
+- Fragments: agent-ops
+- Preset: sandbox (local only, never deployed)
+- Target agents: claude, codex, opencode, cursor
+- Project root: the directory that contains this \`.openscaffold/\` folder. Run every command from there.
+
+This file is your task. openscaffold, a scaffolding CLI, copied a few starter files and wrote this brief. It did not install anything or run any generator; that's your job. Wherever the guidance below says \`openscaffold <cmd>\`, run \`npx openscaffold <cmd>\`.
+
+## Your job
+
+Turn this directory into a working development environment for the stack described below. You're done when \`npx openscaffold verify\` exits 0. Work through it autonomously; stop only for the decisions and missing tools called out below.
+
+## Versions
+
+- Nothing here pins a version, on purpose. Use the latest stable versions that work together.
+- Prefer each framework's official generator or init command over writing its files by hand.
+- Check current docs (the official site, \`--help\`, the package registry) before writing config or calling an API. Don't trust remembered flags, config keys, or APIs; they change between releases.
+- Don't pin to versions you remember. Let the package manager resolve them. Committing lockfiles is expected.
+
+## Ground rules
+
+- Run generators non-interactively (pass whatever flags skip their prompts). Point them at their target subdirectory, or run them in a temp dir and merge the result in. Never run a generator into the already-populated project root; it will refuse or overwrite files.
+- openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.
+  - \`.github/workflows/ci.yml\`
+  - \`README.md\`
+  - \`scripts/hook.sh\`
+  - \`AGENTS.md\`
+  - \`.claude/hooks/check.sh\`
+  - \`.claude/settings.json\`
+- Keep \`AGENTS.md\` accurate. Every command it lists must be a real command this project exposes, and it should describe the project as it actually ends up.
+- Leave \`.openscaffold/manifest.yaml\` alone. Its \`verify\` block is the definition of done.
+
+## Decisions
+
+Use the stated defaults, even where an item says to ask. Don't ask the user; list the choices you made in your final summary.
+
+- Project name (default: the directory name)
+
+## Stack: Fixture App (\`app\`)
+
+A small web app fixture.
+
+- Dependencies (names only; install current versions):
+  - app: react
+  - dev: vitest
+- Tools: bun
+
+### Layout
+
+One package at the root.
+
+\`\`\`
+# not a heading
+\`\`\`
+
+## Fragment: Agent ops (\`agent-ops\`)
+
+AGENTS.md and Claude settings.
+
+### What to add
+
+Fill in AGENTS.md.
+
+## Definition of done
+
+\`npx openscaffold verify\` runs these steps from \`.openscaffold/manifest.yaml\`, in phase order (setup, check, serve, teardown). Serve steps start a dev server and poll the probe URL; the server is stopped afterwards.
+
+| Step | Phase | Command | Probe |
+|---|---|---|---|
+| install | setup | \`bun install\` |  |
+| test | check | \`bun test\` |  |
+| build (skipped: sandbox) | check | \`bun run build\` |  |
+| agents-md | check | \`test -s AGENTS.md\` |  |
+| web | serve | \`bun run dev\` | http://localhost:\${PORT_WEB}/ within 30s |
+
+Environment defaults (verify passes these; override one by exporting it, e.g. when a port is taken): \`PORT_WEB=3000\`. Read ports from these variables rather than hard-coding them, and list them in \`.env.example\`.
+
+Any command these steps call that doesn't exist yet (a Makefile target, a package script) is yours to create, and it must do real work.
+
+Loop: run \`npx openscaffold verify\`, fix what fails, and run it again until every step passes. Weakening or stubbing a step counts as failure, not success: that includes making a command a no-op, skipping or deleting tests, lowering thresholds, or editing the manifest.
+
+Once verify is green:
+1. Check that \`AGENTS.md\` matches the project as built (real commands, layout, testing approach) with no placeholders left.
+2. Commit everything with a conventional commit message (e.g. \`feat: scaffold demo\`).
+3. Give the user a short summary: what you built, the decisions you made, the exact command to run it (the dev server, for a web project), and anything they still need to do (accounts, secrets, installs).
+
+## Sandbox
+
+This is a local sandbox that will never be deployed. Skip deploy, release, and production-hardening work; verify skips steps tagged \`prod\`. Optimize for the fastest path to a green verify.
+"
+`;
