@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Stop: format the files changed in the working tree (staged, unstaged, and new
-# untracked files) at the end of each turn, so what the agent leaves behind is
-# formatted even if nobody runs the formatter by hand. That is every changed
-# file, including ones you are editing yourself; see .claude/README.md.
+# Stop: format the files this session wrote (Edit/Write) at the end of each turn,
+# so what the agent leaves behind is formatted even if nobody runs the formatter
+# by hand. lint-on-write.sh records each written path in a per-session list
+# outside the repo (see session_file_list in _lib.sh); this hook formats the ones
+# that still exist inside the project, then clears the list. Files other agents
+# or you are editing in the same checkout are left alone. No session_id or no
+# list: nothing is formatted.
 #
 # Only formatters the project has opted into run, and only on the files they own:
 #
@@ -20,14 +23,24 @@ hook_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=_lib.sh
 source "$hook_dir/_lib.sh"
 
-cat >/dev/null 2>&1 || true # payload unused
+hook_require_jq
+
+input=$(cat)
+list=$(session_file_list "$input") || exit 0
+[ -s "$list" ] || exit 0
+cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null) || cwd=""
+if [ -n "$cwd" ]; then cwd=$(cd "$cwd" 2>/dev/null && pwd -P) || cwd=""; fi
 
 root=$(project_root)
-cd "$root" 2>/dev/null || exit 0
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+root=$(cd "$root" 2>/dev/null && pwd -P) || exit 0
+cd "$root" || exit 0
 
 plan=$(mktemp "${TMPDIR:-/tmp}/claude-format.XXXXXX") || exit 0
-trap 'rm -f "$plan"' EXIT
+# Claim the list before reading it (mv is atomic), so a path recorded while this
+# hook runs lands in a fresh list for the next Stop instead of being dropped.
+claimed="$plan.files"
+mv "$list" "$claimed" 2>/dev/null || { rm -f "$plan"; exit 0; }
+trap 'rm -f "$plan" "$claimed"' EXIT
 
 # prettier_for <dir>: prettier, when the project configured it and installed it.
 prettier_for() {
@@ -75,18 +88,22 @@ formatter_for() {
   esac
 }
 
-# NUL-separated (-z) so git doesn't quote paths with spaces or non-ASCII
-# characters. Works before the first commit too (no HEAD needed).
-while IFS= read -r -d '' rel; do
+# lint-on-write.sh recorded physical paths; one per line, repeats possible.
+while IFS= read -r f; do
   # The plan file is tab- and newline-separated.
-  case "$rel" in *$'\t'* | *$'\n'*) continue ;; esac
-  [ -n "$rel" ] && [ -f "$root/$rel" ] || continue
-  key=$(formatter_for "$root/$rel") || continue
-  printf '%s\t%s\n' "$key" "$root/$rel" >>"$plan"
-done < <({
-  git diff -z --name-only --cached --diff-filter=d 2>/dev/null || true
-  git ls-files -z --modified --others --exclude-standard 2>/dev/null || true
-} | sort -zu)
+  case "$f" in *$'\t'*) continue ;; esac
+  [ -n "$f" ] && [ -f "$f" ] || continue
+  case "$f" in
+  "$root"/*) ;;
+  *)
+    # A worktree the agent works in, as lint-on-write.sh allows.
+    [ -n "$cwd" ] || continue
+    case "$f" in "$cwd"/*) ;; *) continue ;; esac
+    ;;
+  esac
+  key=$(formatter_for "$f") || continue
+  printf '%s\t%s\n' "$key" "$f" >>"$plan"
+done < <(sort -u "$claimed")
 
 [ -s "$plan" ] || exit 0
 

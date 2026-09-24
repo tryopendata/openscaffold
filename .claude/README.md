@@ -24,14 +24,14 @@ The only expected difference is `validate-registry.sh`, which is specific to thi
 
 | Hook | Event | What it does |
 | --- | --- | --- |
-| `session-start.sh` | SessionStart | Adds branch, dirty-file count, a warning on `main`, and a note when jq is missing. |
+| `session-start.sh` | SessionStart | Adds branch, dirty-file count, a warning on `main`, missing `node_modules/`, and a note when jq is missing. |
 | `block-destructive.sh` | PreToolUse `Bash` | Denies commands that destroy work or data: `rm` of `/`, `~` or `.`, `git reset --hard`, `git clean -f`, force push (`--force-with-lease` is allowed), publishing a release (`bun publish`, `npm publish`). The agent sees the reason and asks you instead. |
 | `detect-secrets.sh` | PreToolUse `Edit\|Write` | Denies writes containing credential-shaped strings (cloud and SaaS keys, private keys, tokens, connection strings with passwords). |
-| `lint-on-write.sh` | PostToolUse `Edit\|Write` | Runs Biome on the `.ts`/`.js`/`.json` file just written (shellcheck for `.sh`) and hands diagnostics back to the agent. `registry/` is excluded by `biome.json`, so it stays quiet there. |
+| `lint-on-write.sh` | PostToolUse `Edit\|Write` | Runs Biome on the `.ts`/`.js`/`.json` file just written (shellcheck for `.sh`) and hands diagnostics back to the agent. `registry/` is excluded by `biome.json`, so it stays quiet there. Also records the path for `format-changed.sh`. |
 | `validate-registry.sh` | PostToolUse `Edit\|Write` | After a write under `registry/`, runs `bun src/cli.ts validate registry --json` (~0.1s) and hands back any errors or warnings. Repo-specific. |
-| `format-changed.sh` | Stop | Runs `biome check --write` on changed files. "Changed" means everything git sees as modified, staged, or untracked, so it also formats files you are editing yourself while the agent works. |
+| `format-changed.sh` | Stop | Formats the files this session wrote with `biome check --write`, then forgets them. `lint-on-write.sh` records each path written through Edit/Write in a per-session list under `$TMPDIR/openscaffold-hooks/`, keyed by the session id. Files you or other agents in the same checkout are editing aren't touched; no session id means nothing is formatted. |
 | `_destructive-patterns.sh` | (sourced) | The pattern list behind `block-destructive.sh`. |
-| `_lib.sh` | (sourced) | Shared helpers: jq check, project root, `find_up`, a portable `with_timeout`. |
+| `_lib.sh` | (sourced) | Shared helpers: jq check, project root, `find_up`, a portable `with_timeout`, the per-session file list. |
 
 How they behave:
 

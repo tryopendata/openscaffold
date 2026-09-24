@@ -1,7 +1,7 @@
 # `.claude/`: Claude Code config
 
 ```
-settings.json        shared config: hooks wiring, destructive-command deny rules
+settings.json        shared config: hooks wiring, read-only allow rules, destructive-command deny rules
 settings.local.json  your machine-only overrides (gitignored, create as needed)
 hooks/               shell hooks, described below
 rules/               path-scoped guidance, loaded when a rule's `paths:` globs match
@@ -13,13 +13,13 @@ Project instructions live in `AGENTS.md` at the repo root, which every coding ag
 
 | Hook | Event | What it does |
 | --- | --- | --- |
-| `session-start.sh` | SessionStart | Adds branch, dirty-file count, a warning on `main`, a missing `.env`, compose services that aren't running, and a note when jq is missing. |
+| `session-start.sh` | SessionStart | Adds branch, dirty-file count, a warning on `main`, a missing `.env`, uninstalled dependencies (a `package.json` without `node_modules/` or a `pyproject.toml` without `.venv/`, at the root or one directory down, with the install command), compose services that aren't running, and a note when jq is missing. |
 | `block-destructive.sh` | PreToolUse `Bash` | Denies commands that destroy work or data: `rm` of `/`, `~` or `.`, `git reset --hard`, `git clean -f`, force push (`--force-with-lease` is allowed), `DROP TABLE`, `docker compose down -v`, publishing a release. The agent sees the reason and asks you instead. |
 | `detect-secrets.sh` | PreToolUse `Edit\|Write` | Denies writes containing credential-shaped strings (cloud and SaaS keys, private keys, tokens, connection strings with passwords). |
-| `lint-on-write.sh` | PostToolUse `Edit\|Write` | Runs the project's linter on the file just written (ruff, biome or eslint, golangci-lint or gofmt, shellcheck) and hands diagnostics back to the agent. |
-| `format-changed.sh` | Stop | Formats changed files with the formatters the project has configured (ruff, biome or prettier, gofmt). "Changed" means everything git sees as modified, staged, or untracked, so it also formats files you are editing yourself while the agent works. |
+| `lint-on-write.sh` | PostToolUse `Edit\|Write` | Runs the project's linter on the file just written (ruff, biome or eslint, golangci-lint or gofmt, shellcheck) and hands diagnostics back to the agent. Also records the path for `format-changed.sh`. |
+| `format-changed.sh` | Stop | Formats the files this session wrote with the formatters the project has configured (ruff, biome or prettier, gofmt), then forgets them. `lint-on-write.sh` records each path written through Edit/Write in a per-session list under `$TMPDIR/openscaffold-hooks/`, keyed by the session id. Files you or other agents in the same checkout are editing aren't touched; no session id means nothing is formatted. |
 | `_destructive-patterns.sh` | (sourced) | The pattern list behind `block-destructive.sh`. Reuse it from any hook that approves or rewrites Bash commands. |
-| `_lib.sh` | (sourced) | Shared helpers: jq check, project root, `find_up`, a portable `with_timeout`. |
+| `_lib.sh` | (sourced) | Shared helpers: jq check, project root, `find_up`, a portable `with_timeout`, the per-session file list. |
 
 How they behave:
 
@@ -44,6 +44,8 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git reset --hard"}}' | bash .
 ## Settings
 
 `settings.json` is shared and committed. Some keys (permission allow rules, plugin marketplaces) only take effect after each person trusts the folder in Claude Code; deny rules apply right away. Put anything personal (extra permissions, env, personal MCP servers) in `settings.local.json`.
+
+`permissions.allow` starts with read-only git only (`status`, `diff`, `log`, `show`, `branch --show-current`). Add the project's own non-destructive commands (lint, test, typecheck) as they settle; leave deploy, publish, and anything destructive to prompt.
 
 `permissions.deny` repeats the worst destructive shapes (`rm -rf /`, `rm -rf ~`, `rm -rf .`, force push, `git reset --hard`) so they stay blocked on a machine without jq, where `block-destructive.sh` can't run. They are exact rules on purpose: a wildcard such as `Bash(rm -rf /*)` would match every `rm -rf /some/abs/path`, and a deny rule can't be overridden by an allow rule.
 

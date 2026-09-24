@@ -3,8 +3,9 @@
 # diagnostics back to the agent as additionalContext, so it fixes them now
 # instead of finding out at `make lint` time or in CI.
 #
-# Advisory and read-only: never blocks, never rewrites the file (format-changed.sh
-# formats at the end of the turn). The linter is picked by file extension and
+# Advisory and read-only: never blocks, never rewrites the file. It also records
+# the path in this session's list (see session_file_list in _lib.sh), which
+# format-changed.sh formats at the end of the turn. The linter is picked by file extension and
 # only runs when it is installed for this project:
 #
 #   *.py              ruff (project .venv first, then PATH)
@@ -49,6 +50,18 @@ esac
 # Dependencies, build output, and VCS internals are not ours to lint.
 case "$file_path" in
 */node_modules/* | */.venv/* | */venv/* | */vendor/* | */dist/* | */build/* | */.git/* | */target/*) exit 0 ;;
+esac
+
+# Record the path for format-changed.sh, which formats only what this session
+# wrote so it never rewrites a file another agent in the same checkout is editing.
+# Best effort: a failed write here only means the file isn't formatted at Stop.
+case "$file_path" in
+*$'\n'*) ;;
+*)
+  if list=$(session_file_list "$input"); then
+    printf '%s\n' "$file_path" >>"$list" 2>/dev/null || true
+  fi
+  ;;
 esac
 
 file_dir=$(dirname "$file_path")

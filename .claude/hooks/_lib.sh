@@ -78,6 +78,21 @@ with_timeout() {
   return "$rc"
 }
 
+# session_file_list <payload-json>: print the path of this session's list of
+# written files, creating its directory. The list lives outside the repo, keyed
+# by the payload's session_id reduced to [A-Za-z0-9_-] so it can't name a path
+# elsewhere. Returns 1 when the payload has no usable session_id.
+session_file_list() {
+  local id dir
+  id=$(printf '%s' "$1" | jq -r '.session_id // empty' 2>/dev/null) || return 1
+  id=$(printf '%s' "$id" | tr -cd 'A-Za-z0-9_-')
+  [ -n "$id" ] || return 1
+  dir="${TMPDIR:-/tmp}"
+  dir="${dir%/}/openscaffold-hooks"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  printf '%s/%s.files\n' "$dir" "$id"
+}
+
 # strip_control: drop ANSI escapes and other control bytes that would make a jq
 # payload unreadable, keeping tabs and newlines.
 strip_control() {

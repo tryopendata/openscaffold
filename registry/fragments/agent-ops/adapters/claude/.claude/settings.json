@@ -1,5 +1,16 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show)",
+      "Bash(git show *)",
+      "Bash(git branch --show-current)"
+    ],
     "deny": [
       "Bash(rm -rf /)",
       "Bash(rm -rf ~)",

@@ -14,7 +14,8 @@
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
-      "Bash(git show*)"
+      "Bash(git show*)",
+      "Bash(git branch --show-current)"
     ],
     "deny": [
       "Bash(rm -rf /)",

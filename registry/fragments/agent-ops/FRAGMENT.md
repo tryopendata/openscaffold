@@ -4,7 +4,7 @@ id: agent-ops
 kind: fragment
 category: agent-ops
 name: Agent operations
-description: AGENTS.md for every coding agent, plus a Claude Code adapter with CLAUDE.md, settings, and hooks guarding destructive commands and secrets, linting on write, and formatting on stop.
+description: AGENTS.md for every coding agent, plus a Claude Code adapter with CLAUDE.md, settings, and hooks guarding destructive commands and secrets, linting on write, and formatting the agent's own edits on stop.
 tags: [agents, claude, codex, cursor, opencode]
 applies_to: []
 tools: [git, jq]
@@ -33,4 +33,6 @@ When the repo already has an `AGENTS.md`, the skeleton isn't copied (it's listed
 
 **Claude Code adapter** (when Claude is a target): `CLAUDE.md` imports `AGENTS.md` via `@AGENTS.md` (Claude Code ignores `AGENTS.md` otherwise; never remove the line). `.claude/settings.json` wires the hooks; other fragments deep-merge into it. The hooks need `jq`; if it's missing, tell the user and list it under Pending user actions.
 
-If the project has a linter, confirm `lint-on-write.sh` reports a deliberate lint error, then revert. If it's silent, check the linter is where the hook looks (`.venv`, `node_modules/.bin`, PATH). If the project uses biome or eslint, add `.claude/worktrees/` to the root `.gitignore`: both discover nested config and trip over Claude Code worktrees. Project-specific guards (a generated file never hand-edited) belong in hooks written like the existing ones (bash 3.2, `set -euo pipefail`, quiet exit when a tool is missing).
+`.claude/settings.json` pre-approves only read-only git (`status`, `diff`, `log`, `show`, `branch --show-current`). Once the Commands section of `AGENTS.md` is settled, add `permissions.allow` rules for the project's own non-destructive commands, in the same `Bash(<cmd>)` / `Bash(<cmd> *)` shape: lint, format, typecheck, test, and the single-test-file command (`make lint`, `make test`, the test runner). Never allow deploy, publish, release, migrate, or anything that deletes data; those should keep prompting.
+
+If the project has a linter, confirm `lint-on-write.sh` reports a deliberate lint error, then revert. If it's silent, check the linter is where the hook looks (`.venv`, `node_modules/.bin`, PATH); `session-start.sh` also flags a `package.json` or `pyproject.toml` whose dependencies aren't installed. `format-changed.sh` formats, on Stop, only the files the current session wrote (lint-on-write records them per session), so parallel agents in one checkout don't reformat each other's work in progress. If the project uses biome or eslint, add `.claude/worktrees/` to the root `.gitignore`: both discover nested config and trip over Claude Code worktrees. Project-specific guards (a generated file never hand-edited) belong in hooks written like the existing ones (bash 3.2, `set -euo pipefail`, quiet exit when a tool is missing).

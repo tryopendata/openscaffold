@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SessionStart: a few lines of live state that AGENTS.md can't carry because it
-# is static: the branch, how dirty the tree is, whether .env exists, whether the
-# services declared in the compose file are running, and whether jq (which the
-# other hooks need) is installed.
+# is static: the branch, how dirty the tree is, whether .env exists, whether
+# dependencies are installed, whether the services declared in the compose file
+# are running, and whether jq (which the other hooks need) is installed.
 #
 # Plain-text stdout from a SessionStart hook is added to the agent's context, so
 # this hook needs no jq. Cheap: a few git calls and at most two `docker compose`
@@ -40,11 +40,55 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
-  say "jq is not installed, so the hooks in .claude/hooks that read their input (destructive-command guard, secret detection, lint-on-write) are inactive. Tell the user; installing jq turns them on."
+  say "jq is not installed, so the hooks in .claude/hooks that read their input (destructive-command guard, secret detection, lint-on-write, format-on-stop) are inactive. Tell the user; installing jq turns them on."
 fi
 
 if [ -f .env.example ] && [ ! -f .env ]; then
   say ".env is missing. Copy .env.example to .env and fill in local values before running the app or tests."
+fi
+
+# Dependencies: a package.json without node_modules/ or a pyproject.toml without
+# .venv/, at the root or one directory down (backend/ + frontend/ monorepos).
+# lint-on-write and format-changed only use project-local tools, so without an
+# install they go quiet. No recursive walk: the root plus its immediate subdirs.
+node_install_cmd() {
+  local d=$1 lock
+  for lock in "$d" .; do
+    if [ -f "$lock/bun.lock" ] || [ -f "$lock/bun.lockb" ]; then echo "bun install"; return; fi
+    if [ -f "$lock/pnpm-lock.yaml" ]; then echo "pnpm install"; return; fi
+    if [ -f "$lock/yarn.lock" ]; then echo "yarn install"; return; fi
+    if [ -f "$lock/package-lock.json" ]; then echo "npm install"; return; fi
+  done
+  echo "npm install"
+}
+# Workspace members install into the root node_modules.
+node_workspace=false
+if [ -d node_modules ] && { [ -f pnpm-workspace.yaml ] || grep -q '"workspaces"' package.json 2>/dev/null; }; then
+  node_workspace=true
+fi
+missing=""
+hints=""
+for d in . */; do
+  d=${d%/}
+  [ -d "$d" ] || continue
+  case "$d" in node_modules | .venv | venv | vendor | dist | build | target) continue ;; esac
+  label="" prefix=""
+  [ "$d" = "." ] || { label="$d/"; prefix="cd $d && "; }
+  if [ -f "$d/package.json" ] && [ ! -d "$d/node_modules" ] &&
+    { [ "$d" = "." ] || [ "$node_workspace" = false ]; }; then
+    missing="${missing:+$missing, }${label}node_modules"
+    hints="${hints:+$hints; }\`$prefix$(node_install_cmd "$d")\`"
+  fi
+  if [ -f "$d/pyproject.toml" ] && [ ! -d "$d/.venv" ]; then
+    missing="${missing:+$missing, }${label}.venv"
+    hints="${hints:+$hints; }\`${prefix}uv sync\`"
+  fi
+done
+if [ -n "$missing" ]; then
+  if [ -f Makefile ] && grep -qE '^install[[:space:]]*:' Makefile; then
+    hints="\`make install\`"
+  fi
+  say "Dependencies not installed (missing $missing), so lint-on-write and format-changed skip those files. Install with $hints."
 fi
 
 compose_file=""

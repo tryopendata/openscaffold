@@ -445,11 +445,155 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
     });
   });
 
-  describe.skipIf(!hasGit)("format-changed.sh", () => {
+  describe("session-start.sh dependency check", () => {
+    const start = (dir: string) =>
+      runHook(
+        "session-start.sh",
+        { session_id: "s", hook_event_name: "SessionStart", source: "startup" },
+        { env: { CLAUDE_PROJECT_DIR: dir } },
+      ).stdout;
+    const tree = (files: Record<string, string>) => {
+      const dir = mkdtempSync(join(tmpdir(), "hooks-deps-"));
+      pathDirs.push(dir);
+      for (const [rel, body] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        if (rel.endsWith("/")) mkdirSync(join(dir, rel), { recursive: true });
+        else writeFileSync(join(dir, rel), body);
+      }
+      return dir;
+    };
+    const depLines = (out: string) => out.split("\n").filter((l) => /not installed/.test(l));
+
+    it("names each uninstalled package one level deep, with its install command, in one line", () => {
+      const dir = tree({
+        "frontend/package.json": "{}",
+        "frontend/bun.lock": "",
+        "backend/pyproject.toml": "[project]\nname = 'x'\n",
+      });
+      const lines = depLines(start(dir));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/frontend\/node_modules/);
+      expect(lines[0]).toMatch(/backend\/\.venv/);
+      expect(lines[0]).toMatch(/`cd frontend && bun install`/);
+      expect(lines[0]).toMatch(/`cd backend && uv sync`/);
+    });
+
+    it("points at make install when the Makefile has an install target", () => {
+      const dir = tree({
+        Makefile: "install:\n\tcd web && npm ci\n",
+        "web/package.json": "{}",
+        "web/package-lock.json": "{}",
+      });
+      const lines = depLines(start(dir));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/web\/node_modules/);
+      expect(lines[0]).toMatch(/`make install`/);
+      expect(lines[0]).not.toMatch(/npm/);
+    });
+
+    it.each([
+      ["pnpm-lock.yaml", "pnpm install"],
+      ["yarn.lock", "yarn install"],
+      ["package-lock.json", "npm install"],
+      ["bun.lockb", "bun install"],
+    ])("picks the package manager from %s at the root", (lock, cmd) => {
+      const dir = tree({ "package.json": "{}", [lock]: "" });
+      const lines = depLines(start(dir));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(`\`${cmd}\``);
+    });
+
+    it("is silent when every package has its dependencies installed", () => {
+      const dir = tree({
+        "package.json": "{}",
+        "node_modules/": "",
+        "api/pyproject.toml": "",
+        "api/.venv/": "",
+        "web/package.json": "{}",
+        "web/node_modules/": "",
+        // Deeper than one level and inside dependencies: never looked at.
+        "packages/ui/package.json": "{}",
+        "node_modules/dep/package.json": "{}",
+      });
+      expect(depLines(start(dir))).toEqual([]);
+    });
+
+    it("treats workspace members as installed by the root node_modules", () => {
+      const dir = tree({
+        "package.json": '{"workspaces": ["web"]}',
+        "node_modules/": "",
+        "web/package.json": "{}",
+      });
+      expect(depLines(start(dir))).toEqual([]);
+    });
+  });
+
+  describe.skipIf(!hasGit || !hasJq)("format-changed.sh", () => {
+    // Each test gets its own TMPDIR, so session file lists can't leak between tests.
+    const setup = () => {
+      const repo = mkdtempSync(join(tmpdir(), "hooks-fmt-"));
+      pathDirs.push(repo);
+      git(repo, "init", "-q");
+      const bin = mkdtempSync(join(tmpdir(), "hooks-bin-"));
+      pathDirs.push(bin);
+      const log = join(bin, "gofmt.log");
+      // A fake gofmt that records the files it was asked to format.
+      writeFileSync(
+        join(bin, "gofmt"),
+        `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${log}'; done\n`,
+        { mode: 0o755 },
+      );
+      // TMPDIR two levels down, so a list path escaping it would still land in tmpRoot.
+      const tmpRoot = mkdtempSync(join(tmpdir(), "hooks-tmp-"));
+      pathDirs.push(tmpRoot);
+      const env = {
+        PATH: `${bin}${delimiter}${pathWithout(LINTERS)}`,
+        CLAUDE_PROJECT_DIR: repo,
+        TMPDIR: join(tmpRoot, "a", "b"),
+      };
+      mkdirSync(env.TMPDIR, { recursive: true });
+      const wrote = (session_id: string, file: string) =>
+        runHook(
+          "lint-on-write.sh",
+          {
+            session_id,
+            transcript_path: "/tmp/t.jsonl",
+            cwd: repo,
+            permission_mode: "default",
+            hook_event_name: "PostToolUse",
+            tool_name: "Write",
+            tool_input: { file_path: join(repo, file), content: "package main\n" },
+            tool_response: { filePath: join(repo, file), success: true },
+          },
+          { env },
+        );
+      const stop = (session_id?: string) =>
+        runHook(
+          "format-changed.sh",
+          {
+            session_id,
+            transcript_path: "/tmp/t.jsonl",
+            cwd: repo,
+            permission_mode: "default",
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+          },
+          { env },
+        );
+      // File arguments only; the fake also logs gofmt's flags.
+      const formatted = () =>
+        existsSync(log)
+          ? readFileSync(log, "utf8")
+              .split("\n")
+              .filter((a) => a && !a.startsWith("-"))
+          : [];
+      return { repo, wrote, stop, formatted, log, tmpRoot };
+    };
+
     it("exits 0 silently, whatever formatters are present", () => {
       const r = runHook(
         "format-changed.sh",
-        { hook_event_name: "Stop", stop_hook_active: false },
+        { session_id: "s1", hook_event_name: "Stop", stop_hook_active: false },
         { env: { PATH: pathWithout(LINTERS), CLAUDE_PROJECT_DIR: project } },
       );
       expect(r.code).toBe(0);
@@ -457,30 +601,59 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       expect(r.stderr).toBe("");
     });
 
-    it("passes paths with spaces and non-ASCII characters to the formatter", () => {
-      const repo = mkdtempSync(join(tmpdir(), "hooks-fmt-"));
-      pathDirs.push(repo);
-      git(repo, "init", "-q");
-      const names = ["héllo.go", "with space.go", "plain.go"];
-      for (const n of names) writeFileSync(join(repo, n), "package main\n");
-      // A fake gofmt that records the files it was asked to format.
-      const bin = mkdtempSync(join(tmpdir(), "hooks-bin-"));
-      pathDirs.push(bin);
-      const log = join(bin, "gofmt.log");
-      writeFileSync(
-        join(bin, "gofmt"),
-        `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${log}'; done\n`,
-        { mode: 0o755 },
-      );
-      const PATH = `${bin}${delimiter}${pathWithout(LINTERS)}`;
-      const r = runHook(
-        "format-changed.sh",
-        { hook_event_name: "Stop", stop_hook_active: false },
-        { env: { PATH, CLAUDE_PROJECT_DIR: repo } },
-      );
+    it("formats only the files this session wrote, once", () => {
+      const { repo, wrote, stop, formatted, log } = setup();
+      for (const n of ["mine.go", "theirs.go", "gone.go", "untouched.go"]) {
+        writeFileSync(join(repo, n), "package main\n");
+      }
+      wrote("session-a", "mine.go");
+      wrote("session-a", "gone.go");
+      wrote("session-b", "theirs.go");
+      rmSync(join(repo, "gone.go"));
+
+      const r = stop("session-a");
       expect(r.code).toBe(0);
-      const formatted = readFileSync(log, "utf8").split("\n").filter(Boolean);
-      for (const n of names) expect(formatted).toContain(join(repo, n));
+      expect(r.stdout).toBe("");
+      expect(formatted()).toEqual([join(realpathSync(repo), "mine.go")]);
+
+      // The list is cleared: the next Stop has nothing new to format.
+      rmSync(log);
+      stop("session-a");
+      expect(formatted()).toEqual([]);
+
+      // The other session's list is intact.
+      stop("session-b");
+      expect(formatted()).toEqual([join(realpathSync(repo), "theirs.go")]);
+    });
+
+    it("formats nothing without a session_id, even with changed files", () => {
+      const { repo, wrote, stop, formatted } = setup();
+      writeFileSync(join(repo, "a.go"), "package main\n");
+      wrote("session-a", "a.go");
+      const r = stop(undefined);
+      expect(r.code).toBe(0);
+      expect(formatted()).toEqual([]);
+    });
+
+    it("keeps a session_id with path characters inside its own list", () => {
+      const { repo, wrote, stop, formatted, tmpRoot } = setup();
+      writeFileSync(join(repo, "a.go"), "package main\n");
+      wrote("../../escape me", "a.go");
+      expect(existsSync(join(tmpRoot, "a", "escape me.files"))).toBe(false);
+      stop("../../escape me");
+      expect(formatted()).toEqual([join(realpathSync(repo), "a.go")]);
+    });
+
+    it("passes paths with spaces and non-ASCII characters to the formatter", () => {
+      const { repo, wrote, stop, formatted } = setup();
+      const names = ["héllo.go", "with space.go", "plain.go"];
+      for (const n of names) {
+        writeFileSync(join(repo, n), "package main\n");
+        wrote("s1", n);
+      }
+      const r = stop("s1");
+      expect(r.code).toBe(0);
+      for (const n of names) expect(formatted()).toContain(join(realpathSync(repo), n));
     });
   });
 });
