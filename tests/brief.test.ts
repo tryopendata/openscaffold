@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cliInvocation, nestHeadings } from "../src/brief.js";
+import { cliInvocation, nestHeadings, summarizePaths } from "../src/brief.js";
 import { runAdd } from "../src/commands/add.js";
 import { runNew } from "../src/commands/new.js";
 import { applyConditionals, parseConditionals } from "../src/conditionals.js";
@@ -187,5 +187,20 @@ describe("BRIEF.md", () => {
     const brief = readFileSync(r.brief, "utf8");
     expect(brief).toContain("## Merge needed");
     expect(brief).toMatchSnapshot();
+  });
+});
+
+describe("summarizePaths", () => {
+  it("collapses directories with more than three files and keeps the rest", () => {
+    const paths = [
+      "Makefile",
+      ".claude/settings.json",
+      ...[1, 2, 3, 4].map((n) => `.claude/hooks/h${n}.sh`),
+    ];
+    expect(summarizePaths(paths)).toEqual([
+      "`Makefile`",
+      "`.claude/settings.json`",
+      "`.claude/hooks/` (4 files)",
+    ]);
   });
 });

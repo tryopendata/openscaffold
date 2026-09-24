@@ -202,8 +202,10 @@ export function buildBrief(input: BriefInput): string {
   ];
   if (input.written.length) {
     rules.push(
-      `openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.\n${input.written
-        .map((f) => `  - ${code(f)}`)
+      `openscaffold wrote these files. They're starting points: adapt them to what you build, don't delete them.\n${summarizePaths(
+        input.written,
+      )
+        .map((f) => `  - ${f}`)
         .join("\n")}`,
     );
   }
@@ -326,4 +328,26 @@ export function buildBrief(input: BriefInput): string {
   }
 
   return `${out.join("\n\n")}\n`;
+}
+
+/** Collapses directories holding more than three written files into one line, keeping the brief short. */
+export function summarizePaths(paths: string[]): string[] {
+  const byDir = new Map<string, string[]>();
+  for (const p of paths) {
+    const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/") + 1) : "";
+    byDir.set(dir, [...(byDir.get(dir) ?? []), p]);
+  }
+  const lines: string[] = [];
+  const emitted = new Set<string>();
+  for (const p of paths) {
+    const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/") + 1) : "";
+    const siblings = byDir.get(dir) ?? [];
+    if (dir && siblings.length > 3) {
+      if (!emitted.has(dir)) lines.push(`${code(dir)} (${siblings.length} files)`);
+      emitted.add(dir);
+    } else {
+      lines.push(code(p));
+    }
+  }
+  return lines;
 }
