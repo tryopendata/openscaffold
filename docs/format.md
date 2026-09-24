@@ -40,7 +40,7 @@ Shared fields:
 | `tags` | string[] | Languages, domains (`python`, `web`, `cli`, `api`). Used for `applies_to` matching and for agents choosing. |
 | `deps` | map of role -> names | Package names only, grouped by role (`backend`, `frontend-dev`, ...). Never versions. |
 | `tools` | string[] | CLIs the agent needs (`uv`, `bun`, `go`, `make`). |
-| `decisions` | string[] | Questions the agent confirms with the user unless `--yes`/`--sandbox`. Each one should state the default. |
+| `decisions` | string[] | Questions the agent confirms with the user unless `--yes`/`--sandbox`. Each one should state the default. Quote any entry containing `: ` or YAML reads it as a mapping. |
 | `env` | map | Defaults written to the manifest and passed to `verify` (e.g. `PORT_API: "8000"`). Use env vars for ports so they can be moved on a busy machine. |
 | `verify` | step[] | See Verify. |
 | `merge` | string[] | Output paths this entry contributes that are JSON and may be deep-merged with other contributors. |

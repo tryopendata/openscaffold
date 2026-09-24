@@ -1,0 +1,342 @@
+import { accessSync, constants, readdirSync, statSync } from "node:fs";
+import { delimiter, join, relative, sep } from "node:path";
+import { OpenScaffoldError } from "./errors.js";
+import type { Registry } from "./registry/index.js";
+import { type AgentId, SANDBOX_EXCLUDED_CATEGORIES } from "./schema/index.js";
+import type {
+  ComposedPlan,
+  ComposeInput,
+  Entry,
+  FileOp,
+  FragmentEntry,
+  OwnedVerifyStep,
+  StackEntry,
+} from "./types.js";
+
+const IGNORED_FILES = new Set([".DS_Store", "Thumbs.db"]);
+
+/** One file an entry ships, before ownership resolution. */
+export interface EntryFile {
+  /** Absolute source path. */
+  src: string;
+  /** Destination relative to the project root, .tmpl stripped, always "/"-separated. */
+  dest: string;
+  template: boolean;
+  /** Set when the file comes from adapters/<agent>/. */
+  agent?: AgentId;
+}
+
+function walk(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of names.sort()) {
+    if (IGNORED_FILES.has(name)) continue;
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) out.push(...walk(path));
+    else out.push(path);
+  }
+  return out;
+}
+
+function toEntryFile(base: string, src: string, agent?: AgentId): EntryFile {
+  const rel = relative(base, src).split(sep).join("/");
+  const template = rel.endsWith(".tmpl");
+  return { src, dest: template ? rel.slice(0, -".tmpl".length) : rel, template, agent };
+}
+
+/** Files an entry would write: files/ for everyone plus adapters/<agent>/ for each target agent. */
+export function listEntryFiles(entryDir: string, agents: readonly AgentId[]): EntryFile[] {
+  const filesDir = join(entryDir, "files");
+  const out = walk(filesDir).map((src) => toEntryFile(filesDir, src));
+  for (const agent of agents) {
+    const adapterDir = join(entryDir, "adapters", agent);
+    out.push(...walk(adapterDir).map((src) => toEntryFile(adapterDir, src, agent)));
+  }
+  return out;
+}
+
+/** True when an executable named `tool` is on PATH. Never spawns a process. */
+export function toolOnPath(tool: string): boolean {
+  const exts =
+    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      try {
+        const path = join(dir, tool + ext);
+        if (!statSync(path).isFile()) continue;
+        accessSync(path, constants.X_OK);
+        return true;
+      } catch {
+        // not here
+      }
+    }
+  }
+  return false;
+}
+
+function appliesTo(fragment: FragmentEntry, stack: StackEntry | undefined): boolean {
+  const targets = fragment.meta.applies_to;
+  if (!stack || targets.length === 0) return true;
+  return targets.includes(stack.id) || stack.meta.tags.some((t) => targets.includes(t));
+}
+
+function composeError(message: string, hint?: string): OpenScaffoldError {
+  return new OpenScaffoldError("compose_error", message, hint);
+}
+
+/** Topological by requires (dependencies first), ties broken alphabetically. */
+function orderFragments(selected: Map<string, FragmentEntry>): FragmentEntry[] {
+  const pending = new Map(
+    [...selected.values()].map((f) => [f.id, f.meta.requires.filter((r) => selected.has(r))]),
+  );
+  const done = new Set<string>();
+  const ordered: FragmentEntry[] = [];
+  while (pending.size) {
+    const ready = [...pending.entries()]
+      .filter(([, deps]) => deps.every((d) => done.has(d)))
+      .map(([id]) => id)
+      .sort();
+    const next = ready[0];
+    if (next === undefined) {
+      throw composeError(
+        `fragments have a requires cycle: ${[...pending.keys()].sort().join(", ")}`,
+        "Remove one of the requires edges between these fragments.",
+      );
+    }
+    pending.delete(next);
+    done.add(next);
+    ordered.push(selected.get(next) as FragmentEntry);
+  }
+  return ordered;
+}
+
+/** Resolve a stack plus fragment toggles into the list of files, verify steps, env, and warnings. */
+export function compose(
+  registry: Registry,
+  input: ComposeInput,
+  opts: { hasTool?: (tool: string) => boolean } = {},
+): ComposedPlan {
+  const warnings: string[] = [];
+  const stack = input.stackId ? registry.stack(input.stackId) : undefined;
+  const existing = new Set(input.existing ?? []);
+  const without = new Set(input.without);
+  const explicitWith = new Set(input.with);
+
+  for (const id of explicitWith) {
+    if (without.has(id)) {
+      throw composeError(`"${id}" is in both --with and --without`, "Pick one.");
+    }
+  }
+  for (const id of without) {
+    if (!registry.get("fragment", id)) {
+      warnings.push(`--without ${id}: no fragment named "${id}", ignoring it`);
+    }
+  }
+
+  const selected = new Map<string, FragmentEntry>();
+  const select = (fragment: FragmentEntry) => {
+    if (existing.has(fragment.id)) return;
+    selected.set(fragment.id, fragment);
+  };
+  const stackLabel = stack ? `stack ${stack.id}` : "";
+  const dropForSandbox = (fragment: FragmentEntry, explicit: boolean): boolean => {
+    if (!input.sandbox || !SANDBOX_EXCLUDED_CATEGORIES.includes(fragment.meta.category)) {
+      return false;
+    }
+    if (explicit) {
+      warnings.push(
+        `${fragment.id} is a ${fragment.meta.category} fragment, which --sandbox normally drops; keeping it because you asked for it with --with`,
+      );
+      return false;
+    }
+    warnings.push(
+      `dropped ${fragment.id}: --sandbox skips ${fragment.meta.category} fragments (add --with ${fragment.id} to keep it)`,
+    );
+    return true;
+  };
+
+  for (const id of stack?.meta.fragments.default ?? []) {
+    if (without.has(id) || explicitWith.has(id)) continue;
+    const fragment = registry.fragment(id);
+    if (!dropForSandbox(fragment, false)) select(fragment);
+  }
+  for (const id of input.always) {
+    if (without.has(id) || explicitWith.has(id)) continue;
+    const fragment = registry.fragment(id);
+    if (!appliesTo(fragment, stack)) {
+      warnings.push(
+        `skipped ${id} from your config's \`always\`: it applies to ${fragment.meta.applies_to.join(", ")}, not ${stackLabel}`,
+      );
+      continue;
+    }
+    if (!dropForSandbox(fragment, false)) select(fragment);
+  }
+  for (const id of explicitWith) {
+    const fragment = registry.fragment(id);
+    if (existing.has(id)) {
+      warnings.push(`${id} is already applied to this project; not applying it again`);
+      continue;
+    }
+    if (!appliesTo(fragment, stack)) {
+      warnings.push(
+        `${id} applies to ${fragment.meta.applies_to.join(", ")}, not ${stackLabel}; keeping it because you asked for it, but check it fits`,
+      );
+    }
+    dropForSandbox(fragment, true);
+    select(fragment);
+  }
+
+  // Pull in requires transitively.
+  const queue = [...selected.values()];
+  while (queue.length) {
+    const fragment = queue.shift() as FragmentEntry;
+    for (const req of fragment.meta.requires) {
+      if (existing.has(req) || selected.has(req)) continue;
+      if (without.has(req)) {
+        throw composeError(
+          `${fragment.id} requires ${req}, but ${req} was excluded with --without`,
+          `Drop --without ${req}, or also exclude ${fragment.id} with --without ${fragment.id}.`,
+        );
+      }
+      const required = registry.fragment(req);
+      selected.set(req, required);
+      queue.push(required);
+    }
+  }
+
+  // Conflicts, in either direction, including already-applied fragments.
+  const present = new Set([...selected.keys(), ...existing]);
+  for (const fragment of selected.values()) {
+    for (const other of present) {
+      const otherMeta = registry.get("fragment", other)?.meta;
+      if (fragment.meta.conflicts.includes(other) || otherMeta?.conflicts.includes(fragment.id)) {
+        const pair = [fragment.id, other].sort();
+        throw composeError(
+          `${pair[0]} conflicts with ${pair[1]}; they can't be combined`,
+          `Rerun with --without ${pair[0]} or --without ${pair[1]}.`,
+        );
+      }
+    }
+  }
+
+  const fragments = orderFragments(selected);
+  const entries: Entry[] = [...(stack ? [stack] : []), ...fragments];
+
+  // Files and ownership.
+  const byDest = new Map<string, FileOp[]>();
+  for (const entry of entries) {
+    for (const f of listEntryFiles(entry.dir, input.agents)) {
+      const op: FileOp = {
+        src: f.src,
+        dest: f.dest,
+        template: f.template,
+        owner: entry.id,
+        merge: false,
+      };
+      byDest.set(f.dest, [...(byDest.get(f.dest) ?? []), op]);
+    }
+  }
+  const files: FileOp[] = [];
+  for (const [dest, ops] of byDest) {
+    if (ops.length > 1) {
+      const owners = [...new Set(ops.map((o) => o.owner))];
+      const mergeable = ops.every((o) =>
+        entries.find((e) => e.id === o.owner)?.meta.merge.includes(dest),
+      );
+      if (!mergeable) {
+        throw composeError(
+          `${dest} is written by more than one entry (${owners.join(", ")})`,
+          `Each path needs one owner. If it's JSON that should be deep-merged, every contributor must list "${dest}" under merge.`,
+        );
+      }
+      for (const o of ops) o.merge = true;
+    }
+    files.push(...ops);
+  }
+
+  // Verify steps.
+  const verify: OwnedVerifyStep[] = [];
+  const stepOwner = new Map<string, string>();
+  for (const entry of entries) {
+    for (const step of entry.meta.verify) {
+      const prior = stepOwner.get(step.name);
+      if (prior !== undefined) {
+        throw composeError(
+          `verify step "${step.name}" is defined by both ${prior} and ${entry.id}`,
+          "Step names must be unique across the composed project; rename one of them.",
+        );
+      }
+      stepOwner.set(step.name, entry.id);
+      verify.push({ ...step, owner: entry.id });
+    }
+  }
+
+  // Env.
+  const env: Record<string, string> = {};
+  const envOwner = new Map<string, string>();
+  for (const entry of entries) {
+    for (const [key, value] of Object.entries(entry.meta.env)) {
+      const prior = envOwner.get(key);
+      if (prior !== undefined && env[key] !== value) {
+        throw composeError(
+          `env ${key} is "${env[key]}" in ${prior} but "${value}" in ${entry.id}`,
+          "Entries that share an env var must agree on its default.",
+        );
+      }
+      env[key] = value;
+      envOwner.set(key, entry.id);
+    }
+  }
+
+  // Decisions.
+  const decisions = [
+    ...(stack?.meta.decisions ?? []),
+    ...fragments.flatMap((f) => f.meta.decisions.map((d) => `${f.id}: ${d}`)),
+  ];
+
+  // Tools.
+  const hasTool = opts.hasTool ?? toolOnPath;
+  const missingTools: ComposedPlan["missingTools"] = [];
+  const checked = new Map<string, boolean>();
+  const check = (tool: string) => {
+    if (!checked.has(tool)) checked.set(tool, hasTool(tool));
+    return checked.get(tool) as boolean;
+  };
+  if (stack) {
+    for (const tool of stack.meta.tools) {
+      if (check(tool)) continue;
+      missingTools.push({ owner: stack.id, tool });
+      warnings.push(
+        `${stack.id} needs ${tool}, which isn't on PATH; install it before running verify`,
+      );
+    }
+  }
+  for (const fragment of fragments) {
+    for (const tool of new Set([...fragment.meta.requires_tools, ...fragment.meta.tools])) {
+      if (check(tool)) continue;
+      missingTools.push({ owner: fragment.id, tool });
+      warnings.push(
+        `${fragment.id} needs ${tool}, which isn't on PATH; install it or rerun with --without ${fragment.id}`,
+      );
+    }
+  }
+
+  return {
+    stack,
+    fragments,
+    agents: [...input.agents],
+    preset: input.sandbox ? "sandbox" : "default",
+    files,
+    verify,
+    env,
+    decisions,
+    warnings,
+    missingTools,
+  };
+}

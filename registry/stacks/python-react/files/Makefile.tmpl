@@ -1,0 +1,66 @@
+# {{project_name}} development commands.
+#
+# A starting point: adapt the recipes to the project, but keep the target
+# names. `openscaffold verify` calls install, lint, typecheck, test, build,
+# dev-api and dev-web, and CI should call the same targets.
+
+PORT_API ?= 8000
+PORT_WEB ?= 5173
+export PORT_API PORT_WEB
+
+.DEFAULT_GOAL := help
+.PHONY: help install dev dev-api dev-web lint format typecheck test coverage build \
+	generate-api check-api e2e clean
+
+help: ## List targets
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+
+install: ## Install backend and frontend dependencies
+	cd backend && uv sync
+	cd frontend && bun install
+
+dev: ## Run API and web dev servers together
+	$(MAKE) -j2 dev-api dev-web
+
+dev-api: ## API dev server with reload on PORT_API
+	cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port $(PORT_API)
+
+dev-web: ## Web dev server on PORT_WEB (proxies /api to PORT_API)
+	cd frontend && bun run dev --port $(PORT_WEB) --strictPort
+
+lint: ## Lint and format-check both halves
+	cd backend && uv run ruff check . && uv run ruff format --check .
+	cd frontend && bun run lint
+
+format: ## Auto-format and auto-fix both halves
+	cd backend && uv run ruff format . && uv run ruff check --fix .
+	cd frontend && bun run format
+
+typecheck: ## mypy strict + tsc
+	cd backend && uv run mypy app tests
+	cd frontend && bun run typecheck
+
+test: ## Backend and frontend tests
+	cd backend && uv run pytest -n auto
+	cd frontend && bun run test
+
+coverage: ## Tests with coverage thresholds enforced
+	cd backend && uv run pytest -n auto --cov --cov-report=term-missing
+	cd frontend && bun run test --coverage
+
+build: ## Production frontend build
+	cd frontend && bun run build
+
+generate-api: ## Dump OpenAPI from the backend and regenerate the typed client
+	cd backend && uv run python scripts/dump_openapi.py ../frontend/openapi.json
+	cd frontend && bun run generate:api
+
+check-api: generate-api ## Fail if the committed spec or generated client is stale
+	git diff --exit-code -- frontend/openapi.json frontend/app/api/generated frontend/tests/mocks/generated
+
+e2e: ## Playwright end-to-end tests (installs the browser on first run)
+	cd frontend && bunx playwright install chromium && bun run test:e2e
+
+clean: ## Remove caches and build output
+	rm -rf backend/.pytest_cache backend/.mypy_cache backend/.ruff_cache backend/htmlcov backend/.coverage*
+	rm -rf frontend/build frontend/.react-router frontend/coverage frontend/playwright-report frontend/test-results

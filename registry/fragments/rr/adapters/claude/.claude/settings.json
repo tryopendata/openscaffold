@@ -1,0 +1,24 @@
+{
+  "_readme": [
+    "rr: registers the rr plugin marketplace (the rr skill and /rr:setup) and pre-approves rr's read-only commands. rr run/exec and named tasks still prompt unless allowed per task; they execute commands on remote hosts."
+  ],
+  "extraKnownMarketplaces": {
+    "rr": {
+      "source": {
+        "source": "github",
+        "repo": "rileyhilliard/rr"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "rr@rr": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(rr doctor *)",
+      "Bash(rr status *)",
+      "Bash(rr tasks *)"
+    ]
+  }
+}

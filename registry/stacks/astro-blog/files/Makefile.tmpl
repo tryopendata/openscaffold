@@ -1,0 +1,42 @@
+# {{project_name}} development commands.
+#
+# A starting point: adapt the recipes, but keep the target names.
+# `openscaffold verify` calls install, check, test, build and dev, and CI
+# should call the same targets.
+
+PORT_WEB ?= 4321
+export PORT_WEB
+
+.DEFAULT_GOAL := help
+.PHONY: help install dev check test build preview new-article format clean
+
+help: ## List targets
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+
+install: ## Install dependencies
+	bun install
+
+dev: ## Astro dev server on PORT_WEB
+	bunx astro dev --port $(PORT_WEB)
+
+check: ## Type-check and validate content (astro check)
+	bunx astro check
+
+test: ## Unit and component tests
+	bunx vitest run
+
+build: ## Static production build into dist/
+	bunx astro build
+
+preview: ## Serve the production build
+	bunx astro preview --port $(PORT_WEB)
+
+new-article: ## Scaffold a draft post: make new-article SLUG=my-post TITLE="My post"
+	@[ -n "$(SLUG)" ] && [ -n "$(TITLE)" ] || { echo 'Usage: make new-article SLUG=my-post TITLE="My post"'; exit 1; }
+	bun scripts/new-article.mjs "$(SLUG)" "$(TITLE)"
+
+format: ## Format with Prettier
+	bunx prettier --write .
+
+clean: ## Remove build output and Astro caches
+	rm -rf dist .astro

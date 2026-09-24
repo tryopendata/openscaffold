@@ -1,0 +1,69 @@
+# {{project_name}} development commands.
+#
+# A starting point: adapt the recipes, but keep the target names.
+# `openscaffold verify` calls install, build, lint, test and smoke, and CI
+# should call the same targets.
+
+BIN      := {{project_slug}}
+PKG      := ./cmd/$(BIN)
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
+COVERAGE_MIN ?= 50
+
+# Dev tools installed with `go install` land here; it may not be on PATH.
+GOBIN_DIR := $(shell go env GOBIN)
+ifeq ($(strip $(GOBIN_DIR)),)
+GOBIN_DIR := $(shell go env GOPATH | cut -d: -f1)/bin
+endif
+GOLANGCI_LINT := $(shell command -v golangci-lint 2>/dev/null || echo $(GOBIN_DIR)/golangci-lint)
+GOIMPORTS     := $(shell command -v goimports 2>/dev/null || echo $(GOBIN_DIR)/goimports)
+
+.DEFAULT_GOAL := help
+.PHONY: help install build lint lint-fix fmt fmt-check test test-integration coverage smoke ci clean
+
+help: ## List targets
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
+
+install: ## Download modules and install dev tools that are missing
+	go mod download
+	@[ -x "$(GOIMPORTS)" ] || go install golang.org/x/tools/cmd/goimports@latest
+
+build: ## Build the binary into bin/ with version info
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BIN) $(PKG)
+
+lint: ## Run golangci-lint
+	@[ -x "$(GOLANGCI_LINT)" ] || { echo "golangci-lint not found. Install it: https://golangci-lint.run/welcome/install/"; exit 1; }
+	"$(GOLANGCI_LINT)" run
+
+lint-fix: ## Run golangci-lint with --fix
+	"$(GOLANGCI_LINT)" run --fix
+
+fmt: ## Format code
+	gofmt -w .
+	"$(GOIMPORTS)" -w .
+
+fmt-check: ## Fail if any file is unformatted
+	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "Unformatted files:"; echo "$$out"; exit 1; fi
+
+test: ## Unit tests
+	go test ./...
+
+test-integration: ## Integration tests (build and run the binary)
+	go test -tags integration ./tests/integration/...
+
+coverage: ## Race-enabled tests with a coverage floor
+	go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	@total=$$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%","",$$3); print $$3}'); \
+	echo "Total coverage: $$total% (minimum $(COVERAGE_MIN)%)"; \
+	awk -v t="$$total" -v m="$(COVERAGE_MIN)" 'BEGIN { exit (t + 0 < m + 0) }' || { echo "Coverage below $(COVERAGE_MIN)%"; exit 1; }
+
+smoke: build ## Build and run the binary's --help and --version
+	./bin/$(BIN) --help >/dev/null
+	./bin/$(BIN) --version
+
+ci: fmt-check lint coverage build ## Everything CI runs
+
+clean: ## Remove build and coverage output
+	rm -rf bin/ dist/ coverage.out coverage.html

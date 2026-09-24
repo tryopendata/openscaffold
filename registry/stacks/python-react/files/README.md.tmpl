@@ -1,0 +1,43 @@
+# {{project_name}}
+
+<!-- One or two sentences on what this project does and who it's for. -->
+
+FastAPI backend in `backend/`, React single-page app in `frontend/`. The frontend's API types, query hooks, and test mocks are generated from the backend's OpenAPI spec.
+
+## Quickstart
+
+Requires [uv](https://docs.astral.sh/uv/), [bun](https://bun.sh), and make.
+
+```bash
+cp .env.example .env
+make install
+make dev        # API on :8000, web on :5173
+```
+
+Open http://localhost:5173. The web dev server proxies `/api` to the backend.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `make dev` | Run API and web dev servers |
+| `make lint` / `make format` | Check / fix lint and formatting |
+| `make typecheck` | mypy + tsc |
+| `make test` | Backend and frontend tests |
+| `make coverage` | Tests with coverage thresholds |
+| `make build` | Production frontend build |
+| `make generate-api` | Regenerate the typed API client after backend changes |
+| `make e2e` | Playwright end-to-end tests |
+
+Run `make help` for the full list.
+
+## Layout
+
+```
+backend/    FastAPI app (app/), tests, pyproject.toml
+frontend/   React Router SPA (app/), tests, generated API client
+```
+
+## License
+
+Copyright (c) {{year}} {{author}}
