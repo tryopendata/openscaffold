@@ -20,4 +20,6 @@ commit-msg:
 pre-push:
   commands:
     check:
-      run: bun run typecheck && bun run test
+      # Checks the pushed commits in a clean worktree, not the working tree.
+      run: scripts/pre-push.sh
+      use_stdin: true
