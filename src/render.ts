@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -189,11 +190,64 @@ interface Rendered {
   dest: string;
   data: Buffer | string;
   mode?: number;
+  /** Some contributor declared the dest under `merge`. */
+  merge: boolean;
+}
+
+/** Where `add` parked its version of a destination that already existed. */
+export interface Parked {
+  dest: string;
+  /** Path under the incoming dir, "/"-separated: `dest`, or `dest.<n>` beside an earlier copy. */
+  incoming: string;
 }
 
 export interface RenderPlan extends RenderResult {
+  /** Destinations parked under the incoming dir this run (only with `incomingDir`). */
+  parked: Parked[];
   /** Write every planned file. Every check already passed when the plan was made. */
   apply: () => void;
+}
+
+function parseJson(data: Buffer | string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(data.toString()) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Where to park `r` under `incomingDir` (`rel`) and what to write there (`data`, absent when an
+ * identical copy is already parked). An earlier run's copy at the same path is never dropped:
+ * JSON (a `merge` dest, or a .json file where both copies parse) is deep-merged into it; anything
+ * else goes beside it as `dest.2`, `dest.3`, ...
+ */
+function parkIn(incomingDir: string, r: Rendered): { rel: string; data?: Buffer | string } {
+  const blocked = (rel: string) =>
+    new OpenScaffoldError(
+      "render_incoming_blocked",
+      `can't write ${join(incomingDir, rel)}: it isn't a regular file or a directory on the way is a symlink`,
+      `Remove ${incomingDir} and rerun.`,
+    );
+  if (!isReplaceable(incomingDir, r.dest)) throw blocked(r.dest);
+  const path = join(incomingDir, r.dest);
+  if (!existsSync(path)) return { rel: r.dest, data: r.data };
+
+  if (r.merge || r.dest.endsWith(".json")) {
+    const a = parseJson(readFileSync(path));
+    const b = parseJson(r.data);
+    if (a.ok && b.ok) {
+      return { rel: r.dest, data: `${JSON.stringify(deepMerge(a.value, b.value), null, 2)}\n` };
+    }
+  }
+  const data = Buffer.from(r.data);
+  for (let n = 1; ; n++) {
+    const rel = n === 1 ? r.dest : `${r.dest}.${n}`;
+    if (!isReplaceable(incomingDir, rel)) throw blocked(rel);
+    const copy = join(incomingDir, rel);
+    if (!existsSync(copy)) return { rel, data: r.data };
+    if (readFileSync(copy).equals(data)) return { rel };
+  }
 }
 
 /**
@@ -202,8 +256,8 @@ export interface RenderPlan extends RenderResult {
  * executable); `.tmpl` sources are rendered; merge groups are rendered, parsed as JSON, and
  * deep-merged in plan order. Existing files are never overwritten, and nothing is written
  * through a symlink: a destination with a symlink anywhere on its path counts as existing. With
- * `incomingDir`, an existing destination's version is parked there instead, replacing a file an
- * earlier run parked at the same path. Rendering and every path check happen here, so a
+ * `incomingDir`, an existing destination's version is parked there instead, keeping any copy an
+ * earlier run parked at the same path (see parkIn). Rendering and every path check happen here, so a
  * template, JSON, or path error leaves the project untouched. `projectDir` need not exist yet.
  */
 export function planRender(
@@ -235,41 +289,41 @@ export function planRender(
         }
         merged = deepMerge(merged, parsed);
       }
-      rendered.push({ dest, data: `${JSON.stringify(merged, null, 2)}\n` });
+      rendered.push({ dest, data: `${JSON.stringify(merged, null, 2)}\n`, merge: true });
     } else {
       rendered.push({
         dest,
         data: contents(first, vars),
         mode: statSync(first.src).mode & 0o777,
+        merge: first.merge,
       });
     }
   }
 
   const written: string[] = [];
   const skipped: string[] = [];
+  const parked: Parked[] = [];
   const writes: { path: string; data: Buffer | string; mode?: number }[] = [];
-  for (const { dest, data, mode } of rendered) {
-    if (isFree(projectDir, dest)) {
-      written.push(dest);
-      writes.push({ path: join(projectDir, dest), data, mode });
+  for (const r of rendered) {
+    if (isFree(projectDir, r.dest)) {
+      written.push(r.dest);
+      writes.push({ path: join(projectDir, r.dest), data: r.data, mode: r.mode });
       continue;
     }
-    skipped.push(dest);
+    skipped.push(r.dest);
     if (!opts.incomingDir) continue;
-    if (!isReplaceable(opts.incomingDir, dest)) {
-      throw new OpenScaffoldError(
-        "render_incoming_blocked",
-        `can't write ${join(opts.incomingDir, dest)}: it isn't a regular file or a directory on the way is a symlink`,
-        `Remove ${opts.incomingDir} and rerun.`,
-      );
+    const park = parkIn(opts.incomingDir, r);
+    parked.push({ dest: r.dest, incoming: park.rel });
+    if (park.data !== undefined) {
+      writes.push({ path: join(opts.incomingDir, park.rel), data: park.data, mode: r.mode });
     }
-    writes.push({ path: join(opts.incomingDir, dest), data, mode });
   }
   for (const w of writes) assertInsideProject(projectDir, w.path);
 
   return {
     written,
     skipped,
+    parked,
     apply: () => {
       for (const w of writes) writeOut(projectDir, w.path, w.data, w.mode);
     },

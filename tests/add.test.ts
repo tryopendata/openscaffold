@@ -135,7 +135,7 @@ describe("runAdd", () => {
     expect(readFileSync(result.brief, "utf8")).toContain("`old.json` (incoming:");
   });
 
-  it("parks the same path again when a later add wants it too", async () => {
+  it("merges a later add's JSON into the copy an earlier run parked, so neither contribution is lost", async () => {
     mkdirSync(join(repo, ".claude"));
     writeFileSync(join(repo, ".claude/settings.json"), '{"mine":true}');
     const first = await runAdd({ ...sb.opts, dir: "repo", fragments: ["agent-ops"] });
@@ -146,10 +146,67 @@ describe("runAdd", () => {
     const parked = JSON.parse(
       readFileSync(join(repo, ".openscaffold/incoming/.claude/settings.json"), "utf8"),
     );
-    expect(parked.permissions.allow).toEqual(["Bash(repo *)"]);
+    // agent-ops's deny rule and hook survive alongside extra's allow rule and hooks.
+    expect(parked).toEqual({
+      permissions: { deny: ["Bash(rm -rf /)"], allow: ["Bash(repo *)"] },
+      hooks: { PreToolUse: [{ command: "a" }, { command: "b" }] },
+    });
     expect(readFileSync(join(repo, ".claude/settings.json"), "utf8")).toBe('{"mine":true}');
     expect(readManifest(repo)?.fragments).toEqual(["agent-ops", "extra"]);
     expect(readFileSync(second.brief, "utf8")).toContain("Extra tooling");
+  });
+
+  it("parks a later add's non-JSON file beside the earlier copy and lists both in the brief", async () => {
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(repo, ".openscaffold/incoming"), { recursive: true });
+    writeFileSync(join(repo, ".openscaffold/incoming/.gitignore"), "coverage/\n");
+    const result = await runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] });
+    expect(result.mergeNeeded).toEqual([".gitignore"]);
+    expect(readFileSync(join(repo, ".openscaffold/incoming/.gitignore"), "utf8")).toBe(
+      "coverage/\n",
+    );
+    expect(readFileSync(join(repo, ".openscaffold/incoming/.gitignore.2"), "utf8")).toBe("dist/\n");
+    expect(readFileSync(result.brief, "utf8")).toContain(
+      "`.gitignore` (incoming: `.openscaffold/incoming/.gitignore`, `.openscaffold/incoming/.gitignore.2`)",
+    );
+  });
+
+  it("refuses a symlinked incoming dir that leads outside the project, writing and listing nothing", async () => {
+    const outside = join(sb.cwd, "dot-ssh");
+    mkdirSync(join(outside, "secret"), { recursive: true });
+    writeFileSync(join(outside, "secret/id_rsa"), "PRIVATE KEY");
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(repo, ".openscaffold"));
+    symlinkSync(outside, join(repo, ".openscaffold/incoming"));
+    await expect(runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] })).rejects.toMatchObject({
+      code: "render_outside_project",
+    });
+    expect(existsSync(join(repo, ".openscaffold/BRIEF.md"))).toBe(false);
+    expect(existsSync(join(repo, "README.md"))).toBe(false);
+    expect(readdirSync(outside)).toEqual(["secret"]);
+    expect(sb.errs.join("\n")).not.toContain("id_rsa");
+  });
+
+  it("refuses a symlinked incoming dir even when it points inside the project", async () => {
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src/app.ts"), "export {};\n");
+    mkdirSync(join(repo, ".openscaffold"));
+    symlinkSync(join(repo, "src"), join(repo, ".openscaffold/incoming"));
+    await expect(runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] })).rejects.toMatchObject({
+      code: "render_incoming_blocked",
+    });
+    expect(existsSync(join(repo, ".openscaffold/BRIEF.md"))).toBe(false);
+    expect(existsSync(join(repo, "README.md"))).toBe(false);
+  });
+
+  it("doesn't list a symlink left under incoming as a file to merge", async () => {
+    const secret = join(sb.cwd, "id_rsa");
+    writeFileSync(secret, "PRIVATE KEY");
+    mkdirSync(join(repo, ".openscaffold/incoming"), { recursive: true });
+    symlinkSync(secret, join(repo, ".openscaffold/incoming/id_rsa"));
+    const result = await runAdd({ ...sb.opts, dir: "repo", fragments: ["lonely"] });
+    expect(result.mergeNeeded).toEqual([]);
+    expect(readFileSync(result.brief, "utf8")).not.toContain("id_rsa");
   });
 
   it("writes nothing when a fragment's conditional markers are malformed", async () => {

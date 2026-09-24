@@ -110,7 +110,7 @@ Every generator runs in its subdirectory, never the populated root.
 - **pytest**: asyncio auto mode, function-scoped loops, `testpaths = ["tests"]`, `--strict-markers --strict-config -ra`, markers `slow` and `integration`, `filterwarnings = ["error"]` with commented targeted ignores.
 - **coverage**: source `app`, branch, parallel, `fail_under = 80`, exclude `if TYPE_CHECKING:`.
 - **ESLint** flat config: `@eslint/js`, typescript-eslint, react-hooks, jsx-a11y recommended (browser globals from `globals`); unused vars error except `^_`. Ignore `build/`, `.react-router/`, generated dirs, `playwright-report/`, `test-results/`.
-- **Prettier**: defaults. `.prettierignore` covers build output but not generated code. `lint` runs ESLint + `prettier --check`; `format` writes.
+- **Prettier**: defaults. `.prettierignore` covers build output and `openapi.json` (written by `dump_openapi.py`, not Prettier) but not the orval output dirs, which orval's Prettier hook formats. `lint` runs ESLint + `prettier --check`; `format` writes.
 - **TypeScript**: strict; `~/*` -> `app/*`; include React Router's generated route types.
 - **Vitest**: own `vitest.config.ts` with `@vitejs/plugin-react` (not the React Router plugin), `happy-dom`, `globals`, `setupFiles: ["./tests/setup.ts"]`, include `app/**/*.test.{ts,tsx}`, exclude `tests/e2e/**`, tsconfig's aliases, and vendor keys (`VITE_PUBLIC_POSTHOG_KEY`) set to `""` in `test.env`. v8 coverage (text + lcov) over `app/**` minus generated code and route entries; thresholds 80 lines/statements, 70 branches, 75 functions.
 - **tests/setup.ts**: jest-dom matchers, MSW server with `onUnhandledRequest: "error"` (reset per test), Testing Library cleanup.
@@ -126,7 +126,7 @@ Every generator runs in its subdirectory, never the populated root.
 
 ## Commands
 
-The shipped root Makefile (`make help`) has `backend-*` and `frontend-*` sub-targets (install, lint, format, typecheck, test, coverage; plus `frontend-build`) that the combined targets call: install, lint, format, typecheck, test, coverage, build, dev, dev-api, dev-web, generate-api, check-api (fail when `openapi.json` no longer matches the backend; a verify step), e2e, clean. `frontend/package.json` scripts back the frontend half: `dev`, `build`, `typecheck` (`react-router typegen && tsc`), `lint`, `format`, `test` (`vitest run`), `test:e2e`, `generate:api`. Mirror both in AGENTS.md.
+The shipped root Makefile (`make help`) has `backend-*` and `frontend-*` sub-targets (install, lint, format, typecheck, test, coverage; plus `frontend-build`) that the combined targets call: install, lint, format, typecheck, test, coverage, build, dev, dev-api, dev-web, generate-api, check-api (a verify step: fails when `openapi.json` no longer matches the spec the backend dumps, compared as parsed JSON so formatting doesn't matter; it checks the spec only, not the generated client, which `generate-api` rebuilds from it and `typecheck` catches drifting), e2e, clean. `frontend/package.json` scripts back the frontend half: `dev`, `build`, `typecheck` (`react-router typegen && tsc`), `lint`, `format`, `test` (`vitest run`), `test:e2e`, `generate:api`. Mirror both in AGENTS.md.
 
 ## Gotchas
 

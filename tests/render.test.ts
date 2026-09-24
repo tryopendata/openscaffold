@@ -13,7 +13,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OpenScaffoldError } from "../src/errors.js";
-import { assertInsideProject, deepMerge, renderFiles, renderTemplate } from "../src/render.js";
+import {
+  assertInsideProject,
+  deepMerge,
+  planRender,
+  renderFiles,
+  renderTemplate,
+} from "../src/render.js";
 import type { FileOp } from "../src/types.js";
 
 const VARS = {
@@ -236,16 +242,47 @@ describe("renderFiles", () => {
     ).toThrow(/outside/);
     expect(existsSync(join(outside, "incoming"))).toBe(false);
   });
-  it("replaces a file an earlier run parked under incoming", () => {
+  it("keeps a file an earlier run parked under incoming and parks a different one beside it", () => {
     writeFileSync(join(out, "README.md"), "mine\n");
     const incoming = join(out, ".openscaffold/incoming");
     renderFiles([op("README.md", "first")], out, VARS, { incomingDir: incoming });
-    const result = renderFiles([op("README.md", "second", { owner: "p" })], out, VARS, {
+    const plan = planRender([op("README.md", "second", { owner: "p" })], out, VARS, {
       incomingDir: incoming,
     });
-    expect(result).toEqual({ written: [], skipped: ["README.md"] });
-    expect(readFileSync(join(incoming, "README.md"), "utf8")).toBe("second");
+    plan.apply();
+    expect(plan.skipped).toEqual(["README.md"]);
+    expect(plan.parked).toEqual([{ dest: "README.md", incoming: "README.md.2" }]);
+    expect(readFileSync(join(incoming, "README.md"), "utf8")).toBe("first");
+    expect(readFileSync(join(incoming, "README.md.2"), "utf8")).toBe("second");
     expect(read("README.md")).toBe("mine\n");
+
+    // The same content again adds no third copy.
+    const again = planRender([op("README.md", "second", { owner: "q" })], out, VARS, {
+      incomingDir: incoming,
+    });
+    expect(again.parked).toEqual([{ dest: "README.md", incoming: "README.md.2" }]);
+  });
+
+  it("deep-merges JSON into a file an earlier run parked at the same path", () => {
+    writeFileSync(join(out, "tsconfig.json"), "{}");
+    const incoming = join(out, ".openscaffold/incoming");
+    renderFiles([op("tsconfig.json", '{"a":{"x":1},"list":[1]}')], out, VARS, {
+      incomingDir: incoming,
+    });
+    const plan = planRender(
+      [op("tsconfig.json", '{"a":{"y":2},"list":[2]}', { owner: "p" })],
+      out,
+      VARS,
+      {
+        incomingDir: incoming,
+      },
+    );
+    plan.apply();
+    expect(plan.parked).toEqual([{ dest: "tsconfig.json", incoming: "tsconfig.json" }]);
+    expect(JSON.parse(readFileSync(join(incoming, "tsconfig.json"), "utf8"))).toEqual({
+      a: { x: 1, y: 2 },
+      list: [1, 2],
+    });
   });
 
   it("writes nothing when a parked file can't be written under incoming", () => {

@@ -19,9 +19,10 @@ import {
   runHandoff,
   splitList,
   stripOwner,
+  untrustedEntries,
   writeBrief,
 } from "../scaffold.js";
-import { type Manifest, SCHEMA_VERSION, TEMPLATE_VARS } from "../schema/index.js";
+import { type Manifest, ManifestSchema, SCHEMA_VERSION, TEMPLATE_VARS } from "../schema/index.js";
 import { buildVars, inferProjectName } from "../vars.js";
 import { VERSION } from "../version.js";
 
@@ -50,16 +51,26 @@ export interface AddResult {
   agentExit?: number;
 }
 
-/** Files under `dir`, relative to it and "/"-separated. Empty when `dir` doesn't exist. */
+/**
+ * Regular files under `dir`, relative to it and "/"-separated. Empty when `dir` doesn't exist.
+ * Symlinks are skipped, not followed: the brief would otherwise send the agent to merge
+ * whatever they point at.
+ */
 function listFiles(dir: string, prefix = ""): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) out.push(...listFiles(join(dir, entry.name), rel));
-    else out.push(rel);
+    else if (entry.isFile()) out.push(rel);
   }
   return out.sort();
+}
+
+/** The project path a parked copy belongs to: `dest` for `dest` or a numbered `dest.<n>`. */
+function parkedDest(file: string, parked: string[]): string {
+  const m = /^(.+)\.(\d+)$/.exec(file);
+  return m?.[1] && parked.includes(m[1]) ? m[1] : file;
 }
 
 /** `openscaffold add`: apply fragments to an existing project and hand off to an agent. */
@@ -160,9 +171,13 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
   }
 
   // Files parked under incoming/ by an earlier run that nobody reconciled. Keep them; this run
-  // only overwrites the paths it writes itself.
+  // only adds to them (see planRender). The incoming dir is checked first so a symlinked one
+  // is never listed.
+  assertMetadataInside(dir);
   const incoming = join(dir, INCOMING_DIR);
-  const leftover = listFiles(incoming).filter((f) => !plan.files.some((op) => op.dest === f));
+  const parkedBefore = listFiles(incoming);
+  const planned = new Set(plan.files.map((op) => op.dest));
+  const leftover = parkedBefore.filter((f) => !planned.has(parkedDest(f, [...planned])));
   if (leftover.length) {
     warnings.push(
       `${INCOMING_DIR}/ still has files from an earlier run that haven't been reconciled (${leftover.join(", ")}); they're kept and listed in the brief`,
@@ -181,11 +196,25 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
   for (const key of Object.keys(vars)) if (!TEMPLATE_VARS.includes(key)) delete vars[key];
   const render = planRender(plan.files, dir, vars, { incomingDir: incoming });
   const { written, skipped } = render;
-  const mergeNeeded = [...skipped, ...leftover];
+  // Each path to merge, with every copy parked for it: earlier runs' and this run's.
+  const copies = new Map<string, string[]>();
+  for (const f of parkedBefore) {
+    const dest = parkedDest(f, parkedBefore);
+    if (planned.has(dest) && !skipped.includes(dest)) continue;
+    copies.set(dest, [...(copies.get(dest) ?? []), f]);
+  }
+  for (const { dest, incoming: copy } of render.parked) {
+    const list = copies.get(dest) ?? [];
+    copies.set(dest, list.includes(copy) ? list : [...list, copy]);
+  }
+  const mergeNeeded = [
+    ...new Set([...skipped, ...leftover.map((f) => parkedDest(f, parkedBefore))]),
+  ];
+  const incomingCopies = Object.fromEntries(mergeNeeded.map((f) => [f, copies.get(f) ?? [f]]));
 
   const now = (opts.now ?? new Date()).toISOString();
   const verify = [...existingSteps, ...newSteps];
-  const next: Manifest = {
+  const next = ManifestSchema.parse({
     openscaffold: VERSION,
     schema_version: SCHEMA_VERSION,
     stack: stackId ?? manifest?.stack ?? null,
@@ -198,12 +227,12 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     verify_hash: tampered ? (manifest?.verify_hash ?? "") : hashVerify(verify),
     created: manifest?.created ?? now,
     updated: now,
-  };
+  } satisfies Manifest);
 
   const cli = opts.cli ?? cliInvocation();
   const verifyCommand = `${cli} verify`;
-  // Everything that can fail (rendering, path checks, the brief's conditionals) runs before the
-  // first write, so a bad fragment leaves the project as it was.
+  // Everything that can fail (rendering, path checks, the brief's conditionals, the manifest
+  // schema) runs before the first write, so a bad fragment leaves the project as it was.
   const briefText = buildBrief({
     mode: "add",
     vars,
@@ -211,12 +240,14 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     existingFragments: manifest?.fragments ?? [],
     written,
     mergeNeeded,
+    incoming: incomingCopies,
     yes: Boolean(opts.yes) || next.preset === "sandbox",
     verify,
     env,
     cli,
+    untrusted: untrustedEntries(plan, dir),
+    untrustedFrom: dir,
   });
-  assertMetadataInside(dir);
   render.apply();
   writeManifest(dir, next);
   const brief = writeBrief(dir, briefText);
@@ -230,7 +261,13 @@ export async function runAdd(opts: AddOptions): Promise<AddResult> {
     print(`Brief: ${brief}`);
     print("");
   }
-  const handoff = await runHandoff(opts, { dir, plan, verifyCommand, configAgents: config.agents });
+  const handoff = await runHandoff(opts, {
+    dir,
+    plan,
+    verifyCommand,
+    configAgents: config.agents,
+    registryDir: dir,
+  });
 
   const result: AddResult = {
     dir,

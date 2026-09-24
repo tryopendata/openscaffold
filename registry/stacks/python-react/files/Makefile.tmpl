@@ -92,10 +92,11 @@ generate-api: ## Dump OpenAPI from the backend and regenerate the typed client
 	cd backend && uv run python scripts/dump_openapi.py ../frontend/openapi.json
 	cd frontend && bun run generate:api
 
-check-api: ## Fail if frontend/openapi.json no longer matches the backend (run generate-api)
+check-api: ## Fail if frontend/openapi.json no longer matches the backend's spec (run generate-api)
 	@tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
 	(cd backend && uv run python scripts/dump_openapi.py "$$tmp") || exit 1; \
-	cmp -s "$$tmp" frontend/openapi.json || { echo "frontend/openapi.json is stale: run make generate-api"; exit 1; }
+	(cd backend && uv run python -c 'import json, sys; a, b = (json.load(open(p)) for p in sys.argv[1:]); sys.exit(a != b)' "$$tmp" ../frontend/openapi.json) \
+		|| { echo "frontend/openapi.json is stale: run make generate-api"; exit 1; }
 
 e2e: ## Playwright end-to-end tests (installs the browser on first run)
 	cd frontend && bunx playwright install chromium && bun run test:e2e

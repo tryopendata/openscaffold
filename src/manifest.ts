@@ -82,14 +82,14 @@ export function readManifest(projectDir: string): Manifest | undefined {
 }
 
 /**
- * Validate and write `.openscaffold/manifest.yaml` with an explanatory header. Refuses to write
- * through a symlink that leads outside the project.
+ * Write `.openscaffold/manifest.yaml` with an explanatory header. Callers validate `manifest`
+ * (ManifestSchema.parse) before their first write. Refuses to write through a symlink that
+ * leads outside the project.
  */
 export function writeManifest(projectDir: string, manifest: Manifest): void {
-  const data = ManifestSchema.parse(manifest);
   const path = join(projectDir, MANIFEST_PATH);
   assertInsideProject(projectDir, path);
   mkdirSync(dirname(path), { recursive: true });
   assertInsideProject(projectDir, path);
-  writeFileSync(path, `${HEADER}${YAML.stringify(data, { lineWidth: 0 })}`);
+  writeFileSync(path, `${HEADER}${YAML.stringify(manifest, { lineWidth: 0 })}`);
 }

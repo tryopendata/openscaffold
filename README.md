@@ -65,7 +65,7 @@ flowchart LR
 ```
 
 1. openscaffold resolves the stack and its fragments, applying your `--with`, `--without` and preset choices.
-2. It copies a small set of version-agnostic files (AGENTS.md skeleton, agent hooks, `.gitignore`, a Makefile to start from), runs `git init`, and writes two things into `.openscaffold/`:
+2. It copies a small set of version-agnostic files (AGENTS.md skeleton, agent hooks, `.gitignore`, a Makefile to start from), runs `git init` (unless the directory is already inside a git repo, which the brief then mentions so the agent asks before committing there), and writes two things into `.openscaffold/`:
    - `BRIEF.md` is the full task for the agent: the stack's guidance, every fragment's guidance, the decisions to confirm with you, and the definition of done.
    - `manifest.yaml` records what was composed and the verify steps.
 3. The agent does the rest. It picks current versions, runs generators, writes tool config for the versions it installed, fills in AGENTS.md from the real commands, and loops on `openscaffold verify` until everything is green.
@@ -121,7 +121,7 @@ npx openscaffold new python-react scratch --sandbox
 npx openscaffold add agent-ops ci-github
 ```
 
-It never overwrites a file. When a file already exists, openscaffold's version goes to `.openscaffold/incoming/` instead, and the brief lists it as "merge needed" so the agent can reconcile the two. Files still unreconciled in `incoming/` on the next `add` are kept and listed again; a path the new run parks replaces its older copy. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
+It never overwrites a file. When a file already exists, openscaffold's version goes to `.openscaffold/incoming/` instead, and the brief lists it as "merge needed" so the agent can reconcile the two. Files still unreconciled in `incoming/` on the next `add` are kept and listed again; an earlier copy at a path the new run parks is kept: JSON is deep-merged into it, anything else is parked beside it as `<path>.2`, and the brief lists every copy. If the repo wasn't created by openscaffold, `add` creates a manifest so `verify` works from then on.
 
 ## Verify
 

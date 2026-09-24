@@ -202,6 +202,10 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell ${PWD}
       "rm -rf ${PWD}/",
       "bash -c 'rm -rf /'",
+      // A backslash-escaped quote opens no string, so the ; after it still splits.
+      "echo \\' ; rm -rf ~",
+      "echo don\\'t; rm -rf ~",
+      'echo "a\\""; rm -rf ~',
     ])("denies %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);
@@ -232,6 +236,7 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
       "npm run rm-cache",
       "grep -r rm .",
       "rm -rf ../sibling-build",
+      'echo "a\\"; rm -rf ~"',
     ])("allows %s", (command) => {
       const r = runHook("block-destructive.sh", bashPayload(command));
       expect(r.code).toBe(0);

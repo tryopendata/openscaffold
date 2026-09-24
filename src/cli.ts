@@ -10,11 +10,16 @@ import { OpenScaffoldError } from "./errors.js";
 import { printJson } from "./output.js";
 import { VERSION } from "./version.js";
 
-// A closed pipe (`openscaffold list | head`) isn't an error; stop quietly.
+// A closed pipe (`openscaffold verify | head`) isn't an error. Drop further output to that
+// stream and let the command finish, so verify still runs teardown and exits with its real code.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EPIPE") process.exit(process.exitCode ?? 0);
-    throw err;
+    if (err.code !== "EPIPE") throw err;
+    stream.write = ((...args: unknown[]) => {
+      const done = args.findLast((a) => typeof a === "function") as (() => void) | undefined;
+      done?.();
+      return true;
+    }) as typeof stream.write;
   });
 }
 

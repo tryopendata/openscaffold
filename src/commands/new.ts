@@ -16,13 +16,15 @@ import {
   collect,
   detected,
   ensureGitRepo,
+  probeGit,
   resolveAgents,
   runHandoff,
   splitList,
   stripOwner,
+  untrustedEntries,
   writeBrief,
 } from "../scaffold.js";
-import { SCHEMA_VERSION } from "../schema/index.js";
+import { type Manifest, ManifestSchema, SCHEMA_VERSION } from "../schema/index.js";
 import type { ComposedPlan } from "../types.js";
 import { buildVars, slugify } from "../vars.js";
 import { VERSION } from "../version.js";
@@ -154,13 +156,14 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     now: opts.now,
   });
 
-  // Everything that can fail (rendering, path checks, the brief's conditionals) runs before the
-  // first write, so a bad entry leaves no half-finished project behind.
+  // Everything that can fail (rendering, path checks, the brief's conditionals, the manifest
+  // schema) runs before the first write, so a bad entry leaves no half-finished project behind.
   const render = planRender(plan.files, dir, vars);
   const { written, skipped } = render;
   const verify = stripOwner(plan.verify);
   const cli = opts.cli ?? cliInvocation();
   const verifyCommand = `${cli} verify`;
+  const git = probeGit(dir);
   const briefText = buildBrief({
     mode: "new",
     vars,
@@ -171,20 +174,12 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     verify,
     env: plan.env,
     cli,
+    git,
+    untrusted: untrustedEntries(plan, dir),
+    untrustedFrom: cwd,
   });
-  assertMetadataInside(dir);
-
-  mkdirSync(dir, { recursive: true });
-  render.apply();
-
-  const gitWarning = ensureGitRepo(dir);
-  if (gitWarning) {
-    warnings.push(gitWarning);
-    if (!opts.json) warnLine(gitWarning);
-  }
-
   const now = (opts.now ?? new Date()).toISOString();
-  writeManifest(dir, {
+  const manifest = ManifestSchema.parse({
     openscaffold: VERSION,
     schema_version: SCHEMA_VERSION,
     stack: stack.id,
@@ -197,7 +192,19 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     verify_hash: hashVerify(verify),
     created: now,
     updated: now,
-  });
+  } satisfies Manifest);
+  assertMetadataInside(dir);
+
+  mkdirSync(dir, { recursive: true });
+  render.apply();
+
+  const gitWarning = ensureGitRepo(dir, git);
+  if (gitWarning) {
+    warnings.push(gitWarning);
+    if (!opts.json) warnLine(gitWarning);
+  }
+
+  writeManifest(dir, manifest);
   const brief = writeBrief(dir, briefText);
 
   if (!opts.json) {
@@ -208,7 +215,13 @@ export async function runNew(opts: NewOptions): Promise<NewResult> {
     print(`Brief: ${brief}`);
     print("");
   }
-  const handoff = await runHandoff(opts, { dir, plan, verifyCommand, configAgents: config.agents });
+  const handoff = await runHandoff(opts, {
+    dir,
+    plan,
+    verifyCommand,
+    configAgents: config.agents,
+    registryDir: cwd,
+  });
 
   const result: NewResult = {
     dir,

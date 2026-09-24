@@ -131,6 +131,21 @@ describe("handoffMessage", () => {
     expect(text).toContain("cd demo && claude ");
   });
 
+  it("warns a human about untrusted entries alongside the prompt", () => {
+    const text = handoffMessage(
+      { kind: "print", reason: "the plan includes untrusted entries" },
+      {
+        ...ctx,
+        untrusted: ["fragment x (./.openscaffold/fragments/x)"],
+        untrustedFrom: "/work",
+      },
+    );
+    expect(text).toContain("untrusted entries: fragment x (./.openscaffold/fragments/x)");
+    expect(text).toContain("./.openscaffold in /work");
+    expect(text).toMatch(/confirm/i);
+    expect(text).toContain(agentPrompt(ctx.verifyCommand));
+  });
+
   it("uses the preferred agent's binary and arguments in the example, and quotes the dir", () => {
     const decision = decideHandoff({
       env: {},
@@ -161,10 +176,20 @@ describe("spawnAgent", () => {
       const script = join(dir, "run.ts");
       writeFileSync(
         script,
-        `import { spawnAgent } from ${JSON.stringify(HANDOFF)};
+        `import { writeFileSync } from "node:fs";
+import { spawnAgent } from ${JSON.stringify(HANDOFF)};
 const before = process.listenerCount("SIGINT");
 const p = spawnAgent("sh", ["-c", "echo $$ > child.pid; exec sleep 30"], ${JSON.stringify(dir)});
+// Registered after spawnAgent's own handlers, so it runs after them. With no handler from
+// spawnAgent it stands in for SIGINT's default action and exits; otherwise it records that
+// the signal arrived and was handled.
+const seen = () => {
+  if (process.listenerCount("SIGINT") === 1) process.exit(130);
+  writeFileSync(${JSON.stringify(join(dir, "sigint-seen"))}, "");
+};
+process.on("SIGINT", seen);
 const code = await p;
+process.off("SIGINT", seen);
 console.log(JSON.stringify({ code, leaked: process.listenerCount("SIGINT") - before }));
 `,
       );
@@ -182,8 +207,12 @@ console.log(JSON.stringify({ code, leaked: process.listenerCount("SIGINT") - bef
       );
       const childPid = Number(readFileSync(pidFile, "utf8"));
       child.kill("SIGINT");
-      // Proving a non-event needs a grace window: give SIGINT time to (not) kill the parent.
-      await new Promise((r) => setTimeout(r, 300));
+      // The marker is written once SIGINT has been delivered and handled, so the parent had its
+      // chance to die by then.
+      await vi.waitFor(() => expect(existsSync(join(dir, "sigint-seen"))).toBe(true), {
+        timeout: 5000,
+        interval: 25,
+      });
       expect(exited).toBe(false);
       expect(() => process.kill(childPid, 0)).not.toThrow();
       child.kill("SIGTERM");

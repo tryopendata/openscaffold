@@ -1,8 +1,10 @@
-import { cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { hashVerify, writeManifest } from "../src/manifest.js";
+import type { VerifyStep } from "../src/schema/index.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const CLI = join(ROOT, "src/cli.ts");
@@ -28,32 +30,66 @@ describe("cli", () => {
     expect(res.stdout).not.toContain("Workflow (for agents)");
   });
 
-  it("exits quietly under node when its output pipe closes early", async () => {
-    // Bun ignores a closed stdout; node raises EPIPE, so this runs a node bundle of the CLI.
-    const out = mkdtempSync(join(tmpdir(), "os-cli-node-"));
-    try {
+  // Bun ignores a closed stdout; node raises EPIPE, so these run a node bundle of the CLI.
+  describe("under node with a closed output pipe", () => {
+    let out: string;
+    let bundle: string;
+    beforeAll(async () => {
+      out = mkdtempSync(join(tmpdir(), "os-cli-node-"));
+      bundle = join(out, "dist/cli.mjs");
       // Laid out like the package: dist/ next to package.json and registry/.
-      await execa("bun", [
-        "build",
-        CLI,
-        "--target",
-        "node",
-        "--outfile",
-        join(out, "dist/cli.mjs"),
-      ]);
+      await execa("bun", ["build", CLI, "--target", "node", "--outfile", bundle]);
       cpSync(join(ROOT, "package.json"), join(out, "package.json"));
       symlinkSync(join(ROOT, "registry"), join(out, "registry"));
+    });
+    afterAll(() => rmSync(out, { recursive: true, force: true }));
+
+    it("exits quietly", async () => {
       // `true` exits without reading, so the CLI's first write hits a closed pipe.
       const res = await execa(
         "bash",
-        ["-c", `node "${join(out, "dist/cli.mjs")}" list | true; echo "\${PIPESTATUS[0]}"`],
+        ["-c", `node "${bundle}" list | true; echo "\${PIPESTATUS[0]}"`],
         { reject: false, env: { OPENSCAFFOLD_OFFLINE: "1" } },
       );
       expect(res.stderr).not.toMatch(/EPIPE|Error/);
       expect(res.stdout.trim()).toBe("0");
-    } finally {
-      rmSync(out, { recursive: true, force: true });
-    }
+    });
+
+    it("keeps running verify to its real exit code and teardown", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "os-cli-verify-"));
+      try {
+        const verify: VerifyStep[] = [
+          { name: "one", run: "echo one", phase: "check", tags: [] },
+          { name: "two", run: "sleep 1; echo two", phase: "check", tags: [] },
+          { name: "fail", run: "exit 1", phase: "check", tags: [] },
+          { name: "down", run: "touch torn-down", phase: "teardown", tags: [] },
+        ];
+        writeManifest(dir, {
+          openscaffold: "0.1.0",
+          schema_version: 1,
+          stack: null,
+          preset: "default",
+          agents: [],
+          fragments: [],
+          vars: {},
+          env: {},
+          verify,
+          verify_hash: hashVerify(verify),
+          created: "2026-01-01T00:00:00Z",
+          updated: "2026-01-01T00:00:00Z",
+        });
+        // head exits after the first line, so every later write hits a closed pipe.
+        const res = await execa(
+          "bash",
+          ["-c", `node "${bundle}" verify --dir "${dir}" | head -1; echo "\${PIPESTATUS[0]}"`],
+          { reject: false, env: { OPENSCAFFOLD_OFFLINE: "1" } },
+        );
+        expect(res.stdout.trim().split("\n").at(-1)).toBe("1");
+        expect(existsSync(join(dir, "torn-down"))).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it("prints --json failures as a JSON error on stdout", async () => {

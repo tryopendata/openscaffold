@@ -70,7 +70,7 @@ Flow: `commands/new|add` load the registry (project, user, remote, bundled origi
 
 ## Error handling
 
-- Expected failures (bad input, unknown id, composition conflict, missing file) throw `OpenScaffoldError` with a hint. `src/cli.ts` is the one place they're printed and turned into exit code 1. `verify` exits 1 on a failed step and 130 when interrupted.
+- Expected failures (bad input, unknown id, composition conflict, missing file) throw `OpenScaffoldError` with a hint. `src/cli.ts` is the one place they're printed and turned into exit code 1. `verify` exits 1 on a failed step and 128 + the signal number when interrupted (130 for SIGINT, 143 for SIGTERM).
 - Never swallow an error. Handle it, or add context and pass it on.
 - Log an error once, at the boundary that handles it.
 

@@ -70,17 +70,27 @@ is_destructive() {
       return 0
     fi
   done < <(awk '
+    # Outside quotes and inside double quotes a backslash escapes the next
+    # character, so \" or \x27 opens no string; inside single quotes it is literal.
+    # If a quote is still open at the end, the quoting was misread: fail closed
+    # by also emitting every line split on every separator, quotes ignored.
     {
       out = ""
-      for (i = 1; i <= length($0); i++) {
+      n = length($0)
+      for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
-        if (q != "") { if (c == q) q = "" }
+        if (c == "\\" && q != "\047" && i < n) { i++; c = c substr($0, i, 1) }
+        else if (q != "") { if (c == q) q = "" }
         else if (c == "\047" || c == "\"") q = c
         else if (c == ";" || c == "&" || c == "|") c = "\n"
         out = out c
       }
       print out
-    }' <<<"$command")
+      raw = $0
+      gsub(/[;&|]/, "\n", raw)
+      lines = lines raw "\n"
+    }
+    END { if (q != "") printf "%s", lines }' <<<"$command")
 
   if m "xargs[[:space:]].*rm[[:space:]]+-[a-zA-Z]*[rRf]"; then
     hit "Recursive or forced rm fed by xargs." "Review the pipeline. Ask the user first."

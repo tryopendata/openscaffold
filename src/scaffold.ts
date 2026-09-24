@@ -1,7 +1,8 @@
 /** Pieces shared by `new` and `add`. */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { type GitState, INCOMING_DIR } from "./brief.js";
 import { OpenScaffoldError } from "./errors.js";
 import {
   type DetectedAgent,
@@ -92,20 +93,38 @@ export function stripOwner(steps: OwnedVerifyStep[]) {
   return steps.map(({ owner: _owner, ...step }) => step);
 }
 
-/** `git init` unless `dir` is already inside a work tree. Returns a warning when git is missing. */
-export function ensureGitRepo(dir: string): string | undefined {
+/** The nearest directory at or above `path` that exists. */
+function nearestExisting(path: string): string {
+  return existsSync(path) || dirname(path) === path ? path : nearestExisting(dirname(path));
+}
+
+/**
+ * How `new` will leave git in `dir`, probed before anything is written so the brief can say it:
+ * "parent" when `dir` (or its nearest existing ancestor) is already inside another work tree,
+ * "none" when git isn't installed, else "fresh" (ensureGitRepo will `git init` it).
+ */
+export function probeGit(dir: string): GitState {
+  const probeDir = nearestExisting(dir);
   try {
-    const inside = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
-      cwd: dir,
+    const toplevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: probeDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    if (inside === "true") return undefined;
+    // An empty target that is itself a repo (new allows a lone .git) is the project's own.
+    if (!toplevel || (probeDir === dir && realpathSync(dir) === toplevel)) return { kind: "fresh" };
+    return { kind: "parent", toplevel };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return "git isn't installed, so the project wasn't initialized as a git repo; install git and run `git init` there";
-    }
-    // Not a work tree: fall through to init.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "none" };
+    return { kind: "fresh" };
+  }
+}
+
+/** `git init` a "fresh" project. Returns a warning when git is missing or init fails. */
+export function ensureGitRepo(dir: string, git: GitState): string | undefined {
+  if (git.kind === "parent") return undefined;
+  if (git.kind === "none") {
+    return "git isn't installed, so the project wasn't initialized as a git repo; install git and run `git init` there";
   }
   try {
     execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "ignore" });
@@ -125,9 +144,31 @@ export function writeBrief(dir: string, text: string): string {
   return path;
 }
 
-/** Throw before anything is written when the manifest or brief would land outside `dir`. */
+/**
+ * Throw before anything is written when the manifest, brief, or incoming dir would land outside
+ * `dir`. `.openscaffold` and its incoming dir must also not be symlinks, even to somewhere inside
+ * the project: `add` lists the incoming dir's files for the agent to merge and tells it to delete
+ * the dir afterwards, so a cloned repo that links it elsewhere could steer both.
+ */
 export function assertMetadataInside(dir: string): void {
-  for (const rel of [MANIFEST_PATH, BRIEF_PATH]) assertInsideProject(dir, join(dir, rel));
+  for (const rel of [MANIFEST_PATH, BRIEF_PATH, `${INCOMING_DIR}/x`]) {
+    assertInsideProject(dir, join(dir, rel));
+  }
+  for (const rel of [dirname(INCOMING_DIR), INCOMING_DIR]) {
+    let link = false;
+    try {
+      link = lstatSync(join(dir, rel)).isSymbolicLink();
+    } catch {
+      // Missing: nothing to check.
+    }
+    if (link) {
+      throw new OpenScaffoldError(
+        "render_incoming_blocked",
+        `${join(dir, rel)} is a symlink`,
+        `openscaffold keeps its files in a real ${rel}/ directory. Remove the symlink and rerun.`,
+      );
+    }
+  }
 }
 
 /** Composed entries that aren't trusted, as "fragment x (./path)" with paths shown from `cwd`. */
@@ -150,7 +191,14 @@ export interface HandoffResult {
 /** Decide, print, and (maybe) launch. In --json mode nothing is printed or launched. */
 export async function runHandoff(
   opts: CommonRunOptions,
-  ctx: { dir: string; plan: ComposedPlan; verifyCommand: string; configAgents: AgentId[] },
+  ctx: {
+    dir: string;
+    plan: ComposedPlan;
+    verifyCommand: string;
+    configAgents: AgentId[];
+    /** Directory whose ./.openscaffold project entries were loaded from. */
+    registryDir: string;
+  },
 ): Promise<HandoffResult> {
   const cwd = opts.cwd ?? process.cwd();
   const rel = relative(cwd, ctx.dir);
@@ -173,6 +221,7 @@ export async function runHandoff(
       decision.kind === "inside-agent" ? join(ctx.dir, BRIEF_PATH) : join(shownDir, BRIEF_PATH),
     verifyCommand: ctx.verifyCommand,
     untrusted,
+    untrustedFrom: ctx.registryDir,
   });
   if (opts.json) return { decision, next };
   const print = opts.print ?? println;

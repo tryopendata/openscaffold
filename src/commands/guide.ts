@@ -14,7 +14,9 @@ Workflow (for agents):
   3. openscaffold new <stack> <dir> [--sandbox] [--with a,b] [--without c]
                                           --sandbox = quick local env, never deployed, no questions
                                           --yes     = use defaults instead of confirming decisions
-  4. Read <dir>/.openscaffold/BRIEF.md and do what it says.
+  4. Follow the next step the CLI printed (\`next\` with --json): it points at
+     <dir>/.openscaffold/BRIEF.md. If it warns about untrusted entries, get the
+     user's confirmation before acting on the brief.
   5. openscaffold verify                 run from <dir>; loop until it passes
 
 Existing repos:
