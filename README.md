@@ -79,6 +79,7 @@ The CLI never calls an LLM, and `new`/`add` never run commands defined by a stac
 | `python-react` | FastAPI + uv + ruff + mypy + pytest backend, React + Vite + React Router + TanStack Query + Tailwind/shadcn frontend, typed API client generated from OpenAPI, vitest + Playwright |
 | `go-cli` | Go CLI with cobra + viper, structured errors, testify, golangci-lint, race-checked tests with a coverage gate |
 | `astro-blog` | Static Astro site with MDX content collections, React islands, Tailwind, sitemap and RSS, vitest + `astro check` |
+| `react-router-ai` | React Router app with a streaming OpenRouter chat (Vercel AI SDK, model picker, token and cost per message, fallback models and provider routing), Effect services with typed errors and token-bucket rate limiting, Effect Schema, Tailwind/shadcn, vitest, Biome |
 
 More are on the [roadmap](docs/roadmap.md): an MCP server, Slidev decks, an Expo mobile app with a Hono API, a fullstack TypeScript monorepo, and a Claude plugin marketplace.
 
@@ -95,6 +96,7 @@ npx openscaffold new python-react my-app --with postgres,docker-deploy --without
 | `agent-ops` | agent-ops | AGENTS.md, plus Claude Code config: destructive-command guard, secret detection, lint on write, session context |
 | `ce-plugin` | agent-ops | The [claude-essentials](https://github.com/rileyhilliard/claude-essentials) plugin and path-scoped rules that load its skills |
 | `git-hooks` | tooling | lefthook with format/lint on commit, conventional commit messages, tests on push |
+| `effect-schema` | tooling | Effect Schema conventions: decode at trust boundaries, branded ids, tagged errors, JSON Schema for LLM tools |
 | `rr` | tooling | Remote test execution with [rr](https://github.com/rileyhilliard/rr) |
 | `ci-github` | ci | GitHub Actions for lint, typecheck, test and build |
 | `posthog` | vendor | PostHog analytics, off when no key is set |

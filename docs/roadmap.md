@@ -1,6 +1,6 @@
 # Roadmap
 
-v1 ships the CLI, the stack/fragment format, the openscaffold skill, three stacks (`python-react`, `go-cli`, `astro-blog`), and ten fragments. Everything below is planned follow-up work. Each item should get a GitHub issue once the repo is public; link it here when it does.
+v1 ships the CLI, the stack/fragment format, the openscaffold skill, four stacks (`python-react`, `go-cli`, `astro-blog`, `react-router-ai`), and eleven fragments. Everything below is planned follow-up work. Each item should get a GitHub issue once the repo is public; link it here when it does.
 
 ## Phase 2: remaining stacks
 
@@ -12,7 +12,15 @@ These are ported from existing projects that already run in production. Each one
 | `slidev-deck` | Slidev decks with a deck registry (`decks.json`), one runner script for dev/build/export/new/check, one file per slide, a local shared addon, screenshot tooling for visual checks. | `~/Projects/opendata/talks` |
 | `mobile-expo` | bun workspaces: Expo + Expo Router app, Hono API with a typed client, Drizzle + Postgres, shared zod schemas package, NativeWind, jest-expo + Testing Library, Maestro e2e. | `~/Projects/poker` |
 | `claude-plugin-marketplace` | A Claude Code plugin marketplace repo: `.claude-plugin/marketplace.json`, plugins with skills, commands, agents and hooks, validation via `claude plugin validate`, conventional commits. | `~/Projects/claude-configs` |
-| `fullstack-ts` | wrkhub's shape modernized: bun workspaces with a shared package, Hono API, Drizzle, React Router v7 web app, Biome, vitest + Playwright, a Docker image per service. | `~/Projects/wrkhub` (layout), `~/Projects/poker` (conventions) |
+| `fullstack-ts` | A separate stack from `react-router-ai` (the single-app AI shape, already shipped). wrkhub's shape modernized: bun workspaces with a shared package, Hono API, Drizzle, React Router v7 web app, Biome, vitest + Playwright, a Docker image per service. | `~/Projects/wrkhub` (layout), `~/Projects/poker` (conventions) |
+
+## `react-router-ai` follow-ups
+
+Shipped with a sandbox end-to-end run to a green `verify` (2026-09-24). Still open:
+
+- `docker-deploy` and `posthog` blocks for the stack (both are optional fragments with no stack-specific guidance yet), then a run with `--with docker-deploy,posthog`.
+- One run without `--sandbox` to exercise SHA-pinned CI actions and the default preset.
+- A live check with a real `OPENROUTER_API_KEY`: model picker, example tool, per-message cost, a 429 with `Retry-After`, history after reload, the extract page.
 
 ## Phase 2: fragments
 

@@ -1,6 +1,6 @@
 ---
 name: openscaffold
-description: Scaffolds a new project or dev environment from a known-good stack (Python API + React, Go CLI, Astro blog, and more) and drives it to a verified, working state. Use when the user wants to start a new project, spin up a dev environment quickly, bootstrap a repo for an interview or prototype, or add standard pieces (agent config, CI, git hooks, Postgres, deploy) to an existing repo.
+description: Scaffolds a new project or dev environment from a known-good stack (Python API + React, Go CLI, Astro blog, React Router AI chat app on OpenRouter, and more) and drives it to a verified, working state. Use when the user wants to start a new project, spin up a dev environment quickly, bootstrap a repo for an interview or prototype, or add standard pieces (agent config, CI, git hooks, Postgres, deploy) to an existing repo.
 ---
 
 # openscaffold
