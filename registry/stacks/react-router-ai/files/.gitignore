@@ -1,0 +1,32 @@
+# Build output and React Router generated types
+build/
+.react-router/
+
+# Dependencies
+node_modules/
+
+# Test output
+coverage/
+*.tsbuildinfo
+
+# Local storage (if the SQLite decision is taken)
+*.sqlite
+*.sqlite-*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Agent worktrees
+.claude/worktrees/
+
+# Logs
+*.log
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

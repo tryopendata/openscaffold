@@ -35,7 +35,7 @@ Sandbox: keep the workflow minimal, with `timeout-minutes` per job. Major-tag ac
 <!-- openscaffold:when tag=monorepo -->
 **Monorepo.** A `changes` job (paths-filter action) outputs one boolean per area; each filter covers the area's directory, shared lockfiles and config, the Makefile, and `.github/workflows/**`, and the frontend's also covers the backend's API and schema paths. One job per area gated on its output. A final `ci-ok` job (`needs:` all, `if: always()`) fails if any needed job failed or was cancelled; make it the required check, or path-skipped jobs block merges forever.
 <!-- openscaffold:end -->
-<!-- openscaffold:when stack=go-cli,astro-blog -->
+<!-- openscaffold:when stack=go-cli,astro-blog,react-router-ai -->
 One job with sequential steps is enough for this project; name it `ci-ok` so it is the required check.
 <!-- openscaffold:end -->
 
@@ -44,6 +44,9 @@ One job with sequential steps is enough for this project; name it `ci-ok` so it 
 <!-- openscaffold:end -->
 <!-- openscaffold:when stack=astro-blog -->
 **astro-blog.** bun's setup action (it reads the `packageManager` field in `package.json`; set it to the bun version you installed), `make install` (frozen when `CI` is set), then `make check`, `make coverage` (or `make test` if the coverage decision is no), `make build`.
+<!-- openscaffold:end -->
+<!-- openscaffold:when stack=react-router-ai -->
+**react-router-ai.** bun's setup action (it reads `packageManager` in `package.json`), then Node's setup action with `node-version-file: .node-version` (vitest, Vite, and the build run on Node). Then `make install`, `make lint`, `make typecheck`, `make coverage`, `make build`. No `OPENROUTER_API_KEY` in CI: the tests never touch the network.
 <!-- openscaffold:end -->
 <!-- openscaffold:when stack=python-react -->
 **python-react.** Backend job: uv's setup action (cache on, `.python-version`), then `make backend-install backend-lint backend-typecheck backend-coverage`. Frontend job: bun's setup action (reads `packageManager` from `frontend/package.json`), then `make frontend-install frontend-lint frontend-typecheck frontend-coverage frontend-build check-api`; `check-api` also needs uv and `make backend-install`. Use the `-test` targets instead of `-coverage` if the coverage decision is no. Playwright, if wanted, is its own job.

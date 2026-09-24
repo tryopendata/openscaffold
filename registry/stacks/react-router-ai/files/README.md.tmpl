@@ -1,0 +1,37 @@
+# {{project_name}}
+
+<!-- openscaffold:fill One sentence on what this app does. -->
+
+A [React Router](https://reactrouter.com) app with a streaming chat backed by [OpenRouter](https://openrouter.ai). Server code is [Effect](https://effect.website) services behind the app's own routes; LLM calls go through the [Vercel AI SDK](https://ai-sdk.dev).
+
+## Quickstart
+
+Requires [bun](https://bun.sh), Node, and make.
+
+```bash
+cp .env.example .env   # set OPENROUTER_API_KEY to enable chat
+make install
+make dev               # http://localhost:5173
+```
+
+Without a key everything still builds, tests, and renders; the chat reports that it isn't configured.
+
+## Configuration
+
+<!-- openscaffold:fill The env vars that matter (key, default model, routing, limits) and what each does. -->
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `make dev` | Dev server |
+| `make lint` | Biome lint and format check |
+| `make typecheck` | Route typegen + tsc |
+| `make test` | Tests (no network) |
+| `make coverage` | Tests with coverage |
+| `make build` | Production build |
+| `make start` | Serve the production build |
+
+## License
+
+Copyright (c) {{year}} {{author}}
