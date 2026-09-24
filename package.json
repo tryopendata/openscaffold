@@ -1,0 +1,61 @@
+{
+  "name": "openscaffold",
+  "version": "0.1.0",
+  "description": "Agent-first project scaffolding: version-less stack definitions that a coding agent turns into a working dev environment.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "openscaffold": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "registry",
+    "skill",
+    "schema"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tryopendata/openscaffold.git"
+  },
+  "keywords": [
+    "scaffold",
+    "agent",
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "boilerplate",
+    "starter"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "bun src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "validate": "bun src/cli.ts validate registry",
+    "schema": "bun scripts/export-schema.ts",
+    "check": "bun run lint && bun run typecheck && bun run test && bun run validate",
+    "prepublishOnly": "bun run check && bun run build"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "execa": "^10.0.1",
+    "giget": "^3.3.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.2",
+    "lefthook": "^2.1.14",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
