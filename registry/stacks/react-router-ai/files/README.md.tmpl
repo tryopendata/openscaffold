@@ -6,31 +6,56 @@ A [React Router](https://reactrouter.com) app with a streaming chat backed by [O
 
 ## Quickstart
 
-Requires [bun](https://bun.sh), Node, and make.
+Requires [bun](https://bun.sh) and Node.
 
 ```bash
 cp .env.example .env   # set OPENROUTER_API_KEY to enable chat
-make install
-make dev               # http://localhost:5173
+bun install            # also installs the git hooks and Chromium for the e2e test
+bun run dev            # http://localhost:5173
 ```
 
 Without a key everything still builds, tests, and renders; the chat reports that it isn't configured.
 
 ## Configuration
 
-<!-- openscaffold:fill The env vars that matter (key, default model, routing, limits) and what each does. -->
+All settings come from `.env` (copy `.env.example`), which the dev server and `bun run start` load. Restart the server after editing it.
+
+<!-- openscaffold:fill A table of the env vars (key, default model, routing, limits, LOG_LEVEL, PORT_WEB) and what each does. -->
+
+## Logs
+
+The dev terminal prints one line per request and one `chat request` line per reply with model, tokens, and cost. `bun run dev` also keeps two files in `logs/`: `dev.log` is a plain-text copy of the terminal, including Vite and render errors, and `server.jsonl` has the app's logs as JSON lines for scripts and agents. API responses carry an `x-request-id` header that matches the `requestId` on its log lines. Starting `bun run dev` moves the previous run's files to `logs/*.prev.*`. In production, logs are JSON lines on stdout and no files are written.
+
+<!-- openscaffold:fill Where chats are stored and who can read them. -->
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `make dev` | Dev server |
-| `make lint` | Biome lint and format check |
-| `make typecheck` | Route typegen + tsc |
-| `make test` | Tests (no network) |
-| `make coverage` | Tests with coverage |
-| `make build` | Production build |
-| `make start` | Serve the production build |
+| `bun install` | Install dependencies and git hooks |
+| `bun run dev` | Dev server; also writes `logs/dev.log` and `logs/server.jsonl` |
+| `bun run dev:bg` / `bun run dev:stop` | The same dev server in the background (for agents and scripts): reuses one that's already running, returns once it's up |
+| `bun run lint` | Biome lint and format check |
+| `bun run typecheck` | Route typegen + tsc |
+| `bun run check` | The full gate: lint, typecheck, test, and e2e (which builds first) |
+| `bun run test` | Tests (no network) |
+| `bun run test:watch` | Tests in watch mode |
+| `bun run coverage` | Tests with coverage |
+| `bun run e2e` | Browser smoke test: the production build in Chromium against a stub OpenRouter |
+| `bun run build` | Production build |
+| `bun run start` | Serve the production build |
+| `bun run format` | Apply Biome formatting and safe fixes |
+| `bun run clean` | Remove build output, caches, and logs |
+
+Use `bun run test`, not `bun test`: the tests run on vitest, and `bun test` is bun's own runner. `bun run` with no arguments lists every script.
+
+## Working in this repo
+
+- `AGENTS.md` is the map: architecture, conventions, and where things go. Coding agents read it first; it's the fastest orientation for people too.
+- The chat (`app/routes/chat.tsx` → `api.chat.ts` → `app/.server/chat.ts`) is the reference path through the stack. `/extract` is the smallest complete feature slice to copy when adding one.
+- The chat export (`app/.server/export.ts`, `app/routes/api.chats.$chatId.export.ts`, `tests/chat-export.test.ts`) is the smallest GET resource route with a path param, to copy for read-only endpoints.
+- In Claude Code: `/add-route` adds a feature slice end to end, `/check` runs the gate and fixes failures, and the `reviewer` agent reviews a change before you commit. Hooks hand the agent type errors (and lint errors, with the agent-ops hooks) right after each edit and point it at a dev server you already have running, so it reads the same `logs/` you do. `.claude/README.md` lists them all.
+- VS Code: open the folder and accept the recommended extensions. The Run and Debug panel has "Debug dev server" and "Debug current test file".
 
 ## License
 

@@ -22,7 +22,11 @@ Write `lefthook.yml` at the root for the installed lefthook (its schema changed 
 
 ## What to add
 
-**Install.** `lefthook` must be on PATH (verify calls it). Add `lefthook install` to `make install` so fresh clones get the hooks, skipped when `CI` is set (runners don't have lefthook), and note in `AGENTS.md` how to install lefthook.
+**Install.** `lefthook` must be on PATH (verify calls it). Add `lefthook install` to the project's install step (`make install`, or a `prepare` script where there's no Makefile) so fresh clones get the hooks, skipped when `CI` is set (runners don't have lefthook), and note in `AGENTS.md` how to install lefthook.
+<!-- openscaffold:when stack=react-router-ai -->
+
+This project has no Makefile: the shipped `scripts/prepare.sh`, run by the `prepare` script after every `bun install`, already runs `lefthook install` (skipped when `CI` is set or lefthook is missing, and non-fatal when it fails, for example outside a git checkout). pre-push runs `bun run typecheck` alongside `bun run test`, in parallel.
+<!-- openscaffold:end -->
 
 **pre-commit**: staged files only, one job per language area (glob, plus root in a monorepo). Format with fixes re-staged (stage-fixed), then lint in check mode if the project has a linter, with the same tools and config as the project's commands. Tools that need the whole project (golangci-lint) run the project's lint command instead. A few seconds total.
 

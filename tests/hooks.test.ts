@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +16,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runNew } from "../src/commands/new.js";
+import { makeSandbox } from "./helpers/scaffold.js";
 
 // Executes the real agent-ops Claude Code hooks with JSON payloads on stdin, the
 // way Claude Code calls them (`bash "<hooks>/<name>.sh"`).
@@ -662,3 +665,304 @@ describe.skipIf(BASHES.length === 0).each(BASHES)("agent-ops hooks under %s", (b
     });
   });
 });
+
+// The react-router-ai stack ships its own guard hooks next to agent-ops'. They're
+// self-contained (no _lib.sh), so they work under --without agent-ops too.
+const STACK_CLAUDE = fileURLToPath(
+  new URL("../registry/stacks/react-router-ai/adapters/claude/.claude/", import.meta.url),
+);
+
+describe("react-router-ai settings", () => {
+  it("has no private _keys and wires only hooks that exist", () => {
+    const s = JSON.parse(readFileSync(join(STACK_CLAUDE, "settings.json"), "utf8"));
+    expect(Object.keys(s).filter((k) => k.startsWith("_"))).toEqual([]);
+    const commands: string[] = Object.values(
+      s.hooks as Record<string, { hooks: { command: string }[] }[]>,
+    ).flatMap((groups) => groups.flatMap((g) => g.hooks.map((h) => h.command)));
+    expect(commands.length).toBeGreaterThan(0);
+    for (const c of commands) {
+      const name = /hooks\/([\w-]+\.sh)/.exec(c)?.[1];
+      expect(name && existsSync(join(STACK_CLAUDE, "hooks", name))).toBe(true);
+    }
+  });
+
+  it("merges with agent-ops so every hook script is wired once and exists", async () => {
+    const sb = makeSandbox();
+    try {
+      const bundledDir = fileURLToPath(new URL("../registry/", import.meta.url));
+      await runNew({
+        ...sb.opts,
+        bundledDir,
+        stack: "react-router-ai",
+        dir: "app",
+        agents: ["claude"],
+        sandbox: true,
+        launch: false,
+      });
+      const dir = join(sb.cwd, "app", ".claude");
+      const s = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+      const scripts: string[] = Object.values(
+        s.hooks as Record<string, { hooks: { command: string }[] }[]>,
+      ).flatMap((groups) =>
+        groups.flatMap((g) => g.hooks.map((h) => /hooks\/([\w-]+\.sh)/.exec(h.command)?.[1] ?? "")),
+      );
+      expect(new Set(scripts).size).toBe(scripts.length);
+      for (const name of scripts) expect(existsSync(join(dir, "hooks", name))).toBe(true);
+      expect(scripts).toEqual(
+        expect.arrayContaining([
+          "session-start.sh",
+          "dev-server-status.sh",
+          "block-destructive.sh",
+          "guard-commands.sh",
+          "lint-on-write.sh",
+          "typecheck-on-write.sh",
+          "format-changed.sh",
+        ]),
+      );
+      expect(s.permissions.allow).toEqual(
+        expect.arrayContaining(["Bash(git status)", "Bash(bun run check)"]),
+      );
+      expect(existsSync(join(sb.cwd, "app", "Makefile"))).toBe(false);
+      for (const f of ["scripts/dev.sh", "scripts/dev-bg.sh", "scripts/prepare.sh"]) {
+        expect(statSync(join(sb.cwd, "app", f)).mode & 0o111).not.toBe(0);
+      }
+    } finally {
+      sb.cleanup();
+    }
+  });
+});
+
+describe.skipIf(BASHES.length === 0 || !hasJq).each(BASHES)(
+  "react-router-ai hooks under %s",
+  (bash) => {
+    const root = "/proj";
+    const run = (name: string, payload: unknown) => {
+      const r = spawnSync(bash, [join(STACK_CLAUDE, "hooks", name)], {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+        timeout: 25_000,
+      });
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    const write = (file_path: string, content: string) => ({
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path, content },
+    });
+
+    describe("guard-generated.sh", () => {
+      it.each([
+        ".react-router/types/app/+types/root.ts",
+        "build/server/index.js",
+        "coverage/index.html",
+        "bun.lock",
+      ])("denies editing %s", (rel) => {
+        const out = run("guard-generated.sh", write(`${root}/${rel}`, "x"));
+        expect(decision(out)).toBe("deny");
+      });
+
+      it.each([
+        `${root}/app/routes/chat.tsx`,
+        `${root}/app/build/notes.ts`,
+        "/elsewhere/build/x.js",
+      ])("allows %s", (path) => {
+        expect(run("guard-generated.sh", write(path, "x"))).toBe("");
+      });
+
+      it("still denies when CLAUDE_PROJECT_DIR has a trailing slash", () => {
+        const r = spawnSync(bash, [join(STACK_CLAUDE, "hooks", "guard-generated.sh")], {
+          input: JSON.stringify(write(`${root}/bun.lock`, "x")),
+          encoding: "utf8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: `${root}/` },
+          timeout: 25_000,
+        });
+        expect(decision(r.stdout)).toBe("deny");
+      });
+    });
+
+    describe("guard-server-imports.sh", () => {
+      it.each([
+        ["app/components/chat/List.tsx", 'import { runtime } from "~/.server/runtime";'],
+        ["app/components/chat/List.tsx", "import type { Db } from '../../lib/db.server'"],
+        ["app/hooks/useModels.ts", 'export { x } from "~/.server/x"'],
+        ["app/schemas/chat.ts", 'const m = await import("~/.server/config")'],
+        ["app/lib/format.ts", 'import { y } from "../.server/y"'],
+      ])("denies %s importing server code", (rel, content) => {
+        expect(decision(run("guard-server-imports.sh", write(`${root}/${rel}`, content)))).toBe(
+          "deny",
+        );
+      });
+
+      it.each([
+        ["app/routes/api.chat.ts", 'import { runRoute } from "~/.server/http";'],
+        ["app/root.tsx", 'import { config } from "~/.server/config";'],
+        ["app/lib/session.server.ts", 'import { x } from "~/.server/x";'],
+        [
+          "app/components/chat/List.tsx",
+          'import { Button } from "~/components/ui/button"; // server',
+        ],
+      ])("allows %s", (rel, content) => {
+        expect(run("guard-server-imports.sh", write(`${root}/${rel}`, content))).toBe("");
+      });
+    });
+
+    describe("guard-commands.sh", () => {
+      it.each([
+        "bunx --bun vitest run",
+        "bun --bun vitest",
+        "bun run --bun dev",
+        "bunx --bun react-router build",
+        "bun add @effect/schema",
+        "bun add effect @effect/schema",
+        "bun --bun run dev",
+        "bun test",
+        "bun test tests/chat.test.ts",
+        "cd app && bun test",
+        "bun run --bun coverage",
+        "bun --bun run e2e",
+      ])("denies %s", (command) => {
+        expect(decision(run("guard-commands.sh", bashPayload(command)))).toBe("deny");
+      });
+
+      it.each([
+        "bun run test tests/chat.test.ts",
+        "make test",
+        "bun add effect",
+        "bun --bun scripts/seed.ts",
+        "grep -r '@effect/schema' app",
+      ])("allows %s", (command) => {
+        expect(run("guard-commands.sh", bashPayload(command))).toBe("");
+      });
+    });
+  },
+);
+
+describe.skipIf(BASHES.length === 0 || !hasJq).each(BASHES)(
+  "react-router-ai typecheck-on-write.sh under %s",
+  (bash) => {
+    const tsc = fileURLToPath(new URL("../node_modules/.bin/tsc", import.meta.url));
+    const dirs: string[] = [];
+    afterAll(() => {
+      for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    });
+
+    // A throwaway TS project with the given files; withTsc links this repo's tsc into it.
+    const project = (files: Record<string, string>, withTsc: boolean) => {
+      const dir = mkdtempSync(join(tmpdir(), "os-tc-"));
+      dirs.push(dir);
+      writeFileSync(
+        join(dir, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["*.ts"] }),
+      );
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+      if (withTsc) {
+        mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+        symlinkSync(tsc, join(dir, "node_modules", ".bin", "tsc"));
+      }
+      return dir;
+    };
+
+    const run = (dir: string, file: string) => {
+      const r = spawnSync(bash, [join(STACK_CLAUDE, "hooks", "typecheck-on-write.sh")], {
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse",
+          tool_name: "Write",
+          tool_input: { file_path: join(dir, file) },
+        }),
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        timeout: 60_000,
+      });
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    const bad = 'export const n: number = "not a number";\n';
+
+    it("is quiet when the project has no tsc", () => {
+      expect(run(project({ "bad.ts": bad }, false), "bad.ts")).toBe("");
+    });
+
+    it.skipIf(!existsSync(tsc))("is quiet for a file that isn't TypeScript", () => {
+      expect(run(project({ "bad.ts": bad, "notes.md": "# notes\n" }, true), "notes.md")).toBe("");
+    });
+
+    it.skipIf(!existsSync(tsc))(
+      "hands back the written file's type errors",
+      () => {
+        const ctx: string = JSON.parse(run(project({ "bad.ts": bad }, true), "bad.ts"))
+          .hookSpecificOutput.additionalContext;
+        expect(ctx).toContain("1 in bad.ts");
+        expect(ctx).toMatch(/bad\.ts\(1,14\): error TS2322/);
+      },
+      60_000,
+    );
+
+    it.skipIf(!existsSync(tsc))(
+      "says when the errors are only in other files",
+      () => {
+        const dir = project({ "bad.ts": bad, "ok.ts": "export const m = 1;\n" }, true);
+        const ctx: string = JSON.parse(run(dir, "ok.ts")).hookSpecificOutput.additionalContext;
+        expect(ctx).toContain("in other files (none in ok.ts)");
+        expect(ctx).toContain("bad.ts(1,14)");
+      },
+      60_000,
+    );
+  },
+);
+
+describe.skipIf(BASHES.length === 0 || !hasJq).each(BASHES)(
+  "react-router-ai dev-server-status.sh under %s",
+  (bash) => {
+    let proj: string;
+    beforeAll(() => {
+      proj = mkdtempSync(join(tmpdir(), "os-dev-"));
+      mkdirSync(join(proj, "logs"));
+    });
+    afterAll(() => rmSync(proj, { recursive: true, force: true }));
+
+    const run = () => {
+      const r = spawnSync(bash, [join(STACK_CLAUDE, "hooks", "dev-server-status.sh")], {
+        input: JSON.stringify({ hook_event_name: "SessionStart" }),
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        timeout: 25_000,
+      });
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+
+    it("is silent with no dev server", () => {
+      expect(run()).toBe("");
+    });
+
+    it("is silent when logs/dev.pid names a process that isn't dev.sh", () => {
+      writeFileSync(join(proj, "logs", "dev.pid"), `${process.pid} 5173\n`);
+      expect(run()).toBe("");
+    });
+
+    it("reports a running dev server and the warnings in its log", async () => {
+      // exec replaces bash with sleep, keeping "scripts/dev.sh" in the command line ps reports
+      // (bash starts first, so ps sees it), and killing the child leaves nothing behind.
+      const child = spawn(bash, ["-c", 'exec -a "bash scripts/dev.sh" sleep 30'], {
+        cwd: proj,
+        stdio: "ignore",
+      });
+      const exited = once(child, "exit");
+      try {
+        writeFileSync(join(proj, "logs", "dev.pid"), `${child.pid} 5199\n`);
+        writeFileSync(
+          join(proj, "logs", "server.jsonl"),
+          '{"level":"info","msg":"request"}\n{"level":"warn","msg":"slow"}\n',
+        );
+        const ctx: string = JSON.parse(run()).hookSpecificOutput.additionalContext;
+        expect(ctx).toContain(`http://localhost:5199 (pid ${child.pid})`);
+        expect(ctx).toContain("1 warn/error line(s)");
+      } finally {
+        child.kill();
+        await exited;
+      }
+    });
+  },
+);

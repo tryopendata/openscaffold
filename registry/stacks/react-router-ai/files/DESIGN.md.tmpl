@@ -1,0 +1,90 @@
+# Design
+
+{{project_name}}'s visual system. It is adapted from the opendata project's design system (itself derived from Linear's): dark, quiet, and dense enough to read a chat and its costs at a glance. Token values live in `app/app.css`; this file says what each role is for and why. Read it before a visual change, and load the `frontend-design-slop` skill (Claude Code ships it in `.claude/skills/`) before adding a header, label, card, badge, empty state, or hero.
+
+## Theme
+
+Dark only. `<html class="dark">` is set in `app/root.tsx`, so shadcn's `dark:` variants apply, and `color-scheme: dark` makes native controls and scrollbars match. There is no light palette to keep in sync.
+
+Hierarchy comes from luminance steps and white-opacity text, not from hue. The chrome has no color except one accent.
+
+## Color roles
+
+| Role | Utility | Use for |
+| --- | --- | --- |
+| Page | `bg-background` | The page and the thread |
+| Surface | `bg-card` | Bubbles, the composer, tool steps, inline error rows |
+| Raised | `bg-popover` | Popovers, tooltips, dialogs |
+| Quiet fill | `bg-muted`, `bg-secondary` | Stop button, badges, hover wash (`hover:bg-muted/50`) |
+| Text | `text-foreground` | Headings and user text (never pure white) |
+| Reading text | `text-foreground/80` | Assistant replies |
+| Secondary text | `text-muted-foreground` | Metadata, placeholders, labels. Its value is chosen to stay above 4.5:1 at 11px on every surface; don't dim it further for body copy |
+| Border | `border-border`, `border-input` | Translucent white hairlines; `/50` for dividers inside a surface |
+| Accent | `bg-primary`, `text-primary`, `ring-ring` | Cyan. The Send button, links, focus rings, the selected model. Nothing decorative |
+| Error | `text-destructive` | The error row's icon and title |
+| Status | `emerald-400/500`, `amber-400/500` | Only for real state: a tool step that finished (emerald) or failed (amber), a copy that worked or didn't |
+
+One accent job per view. If `text-primary` shows up on labels, icons, and dots in the same place, it has stopped meaning "you can act here".
+
+## Type
+
+Inter Variable with the `cv01` and `ss03` features (a single-storey "a", more geometric forms), set on `font-sans` only so they don't reach the mono face. JetBrains Mono (`font-mono`) for data: model ids, token counts, cost, the stack trace.
+
+| Role | Utility | Notes |
+| --- | --- | --- |
+| Reading | `text-md` (15px / 1.6) | Messages, the composer. Replies use `leading-relaxed` |
+| UI and rows | `text-sm`, `text-xs` | Tool steps, the waiting row, buttons, the header, the picker |
+| Meta | `text-2xs` (11px / 1.4) | Usage line, badges, the picker's price line |
+| Title | `text-lg` | Error boundary title only |
+
+Weights: 400 for reading, 510 (`font-medium`, remapped in `@theme`) for emphasis and UI, 590 (`font-semibold`) for strong emphasis. Never 700. `tabular-nums` on any number that changes or lines up.
+
+## Shape and depth
+
+Radius by role: `rounded-sm` for badges, `rounded-md` for buttons and the export pair, `rounded-lg` for tool steps, error rows, the Send button, and the picker trigger, `rounded-xl` for the composer and user bubbles, `rounded-full` only for dots.
+
+Depth is luminance (background, then card, then popover) plus a translucent border. No drop shadows on dark surfaces; the composer's focus state is a `ring-3 ring-ring/10`, not a shadow.
+
+## Layout
+
+One column, `COLUMN` in `app/components/page-header.tsx` (`mx-auto w-full max-w-180 px-6`, 720px), for the header row, the thread, the error row, and the composer, so everything shares a left edge. The header is `h-13` with a bottom border. Messages are `gap-6`. User bubbles sit right at `max-w-4/5`; replies run full width with no avatar or bubble.
+
+## Components
+
+The shared pieces are components, not copied class strings: `PageHeader` and `HeaderLink` (`page-header.tsx`), `PromptCard` and `PromptTextarea` (`prompt-card.tsx`), `ErrorRow` (`error-row.tsx`). Button variants beyond shadcn's: `quiet` (muted text, hover wash; header actions), `accent` (cyan text; Retry), and size `icon-md` (the Send and Stop buttons).
+
+- Header actions: Export and Copy are one segmented control (`h-8 rounded-md border`, hairline divider), icon plus text, icon-only below `sm`. Export stays a real `<a download>` so the browser owns the download and its feedback.
+- Tool step: `rounded-lg border bg-card`, one `min-h-9` row: status pip, label, detail. The pip carries status (spinner, emerald check, amber X); there's no icon tile, because with one tool it wouldn't tell anything apart.
+- Composer: a card with a borderless textarea; the model picker bottom-left, Send or Stop bottom-right. Its focus ring is on the card (`focus-within`), not the textarea.
+- Error row: inline, `rounded-lg border bg-card`, what happened in muted text, and a Retry action in the accent.
+- Empty thread: one line of muted text. No hero, no example cards.
+
+## Motion
+
+Motion exists so a reader can tell what just changed. If a change is obvious without it, don't animate it.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `--dur-fast` | 150ms | Content swapping in place (a label, an icon, the copy result) |
+| `--dur-entry` | 300ms | A module arriving: fade, 3px rise, height from zero |
+| `--dur-word` | 500ms, linear | Streaming words fading in |
+| `ease-out-expo` | `cubic-bezier(0.16, 1, 0.3, 1)` | Everything that isn't linear |
+
+The theme sets `--default-transition-duration` to `--dur-fast` and the default easing to `ease-out-expo`, so a `transition-*` utility needs no duration or easing class.
+
+The classes, in `app.css` under `@layer components`:
+
+- `anim-module`: entry for a block that pushes content down. It animates `grid-template-rows` from `0fr` to `1fr`, so it must wrap exactly one child. Two modules mounting in the same commit double the height growth; animate the outer one only.
+- `anim-fade-in`: in-place swaps. To replay it on purpose, change the element's `key` (the tool step's label and pip do this). Keys are otherwise stable so entries fire once.
+- `anim-word`: the tail of a streaming reply, one span per word; the settled text is a single text node.
+- `anim-pulse-dot`, `anim-spin`: the waiting row and a pending tool step. They replace Tailwind's `animate-pulse`/`animate-spin`, which aren't gated for reduced motion.
+
+The enforceable rules are in `.claude/rules/app/styling.md`; most are linted. The reasons behind them: keyframes sit inside `@media (prefers-reduced-motion: no-preference)` with no `opacity: 0` in a base rule, so reduced motion shows the end state rather than nothing. History never animates, because a reload that replays every entry reads as new content. Nothing springs, bounces, or scales; opacity plus a 2 to 4px translate reads as arrival on a dark surface. To open and close a region, toggle `data-collapsed` and transition `grid-template-rows` (with `inert` on the closed region) rather than animating `height: auto` or measuring in JS.
+
+Accepted exception: shadcn's overlays (popover, tooltip, dialog) fade and slide 2px through tw-animate-css. Their `zoom-*` classes are removed and the rest is behind `motion-safe:`.
+
+## Do and don't
+
+Do: keep one accent job per view; put numbers in mono with `tabular-nums`; use visible text for feedback that has to survive a click or a touch screen; keep the accessible names tests rely on ("Export", "Copy as Markdown", "Message", "Send", "Stop", "Retry").
+
+Don't: use weight 700, pure white text, drop shadows, gradients, or glows; add an uppercase kicker or a subheading that restates its heading; wrap prose in a card; put an icon where it doesn't tell two things apart; claim something the app doesn't know (the Export link doesn't say "Downloaded", because only the browser knows).

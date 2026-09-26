@@ -79,7 +79,7 @@ The CLI never calls an LLM, and `new`/`add` never run commands defined by a stac
 | `python-react` | FastAPI + uv + ruff + mypy + pytest backend, React + Vite + React Router + TanStack Query + Tailwind/shadcn frontend, typed API client generated from OpenAPI, vitest + Playwright |
 | `go-cli` | Go CLI with cobra + viper, structured errors, testify, golangci-lint, race-checked tests with a coverage gate |
 | `astro-blog` | Static Astro site with MDX content collections, React islands, Tailwind, sitemap and RSS, vitest + `astro check` |
-| `react-router-ai` | React Router app with a streaming OpenRouter chat (Vercel AI SDK, model picker, token and cost per message, fallback models and provider routing), Effect services with typed errors and token-bucket rate limiting, Effect Schema, Tailwind/shadcn, vitest, Biome |
+| `react-router-ai` | React Router app with a streaming OpenRouter chat (Vercel AI SDK, model picker, token and cost per message, fallback models and provider routing), Effect services with typed errors and token-bucket rate limiting, Effect Schema, Tailwind/shadcn with a dark design system, structured dev logs, vitest, Playwright, Biome, and Claude Code rules, commands, and guards |
 
 More are on the [roadmap](docs/roadmap.md): an MCP server, Slidev decks, an Expo mobile app with a Hono API, a fullstack TypeScript monorepo, and a Claude plugin marketplace.
 

@@ -18,7 +18,9 @@ These are ported from existing projects that already run in production. Each one
 
 Shipped with a sandbox end-to-end run to a green `verify` (2026-09-24). Still open:
 
-- `docker-deploy` and `posthog` blocks for the stack (both are optional fragments with no stack-specific guidance yet), then a run with `--with docker-deploy,posthog`.
+- Ported back from the project that first run produced (2026-09-25): package.json scripts instead of a Makefile, structured dev logs and background dev-server scripts, a Playwright smoke, the dark design system with its Biome style plugin, chat export, and the Claude Code rules, commands, agents, and guards. Needs a fresh sandbox run to a green `verify` and `bun run check`.
+- A `posthog` block for the stack, then a run with `--with posthog`.
+- `docker-deploy` for the stack: its verify step is a fixed `make docker-build`, and this stack has no Makefile, so it was dropped from the stack's optional fragments. It needs a scripts-based path (or a per-stack verify command) first.
 - One run without `--sandbox` to exercise SHA-pinned CI actions and the default preset.
 - A live check with a real `OPENROUTER_API_KEY`: model picker, example tool, per-message cost, a 429 with `Retry-After`, history after reload, the extract page.
 

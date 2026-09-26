@@ -7,6 +7,8 @@ node_modules/
 
 # Test output
 coverage/
+test-results/
+playwright-report/
 *.tsbuildinfo
 
 # Local storage (if the SQLite decision is taken)
@@ -21,12 +23,16 @@ coverage/
 # Agent worktrees
 .claude/worktrees/
 
-# Logs
+# Logs (bun run dev writes logs/)
+logs/
 *.log
 
 # Editors and OS
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
 *.swp
 .DS_Store
 Thumbs.db

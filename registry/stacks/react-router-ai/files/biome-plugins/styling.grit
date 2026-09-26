@@ -1,0 +1,45 @@
+// Style rules from .claude/rules/app/styling.md that a regex can check. Matches class strings in
+// app/ (and any other string there, so a UI string that looks like a class can trip it).
+// app/components/ui/ is shadcn's output: its arbitrary values and palette colors are exempt,
+// its motion is not.
+language js
+
+or {
+  JsxString(),
+  JsStringLiteralExpression(),
+  JsTemplateChunkElement()
+} as $s where {
+  $filename <: r".*/app/.*",
+  or {
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`:])(?:text|leading|tracking|ring|max-w|min-w|w|h|size|gap|p[xytrbl]?|m[xytrbl]?)-\[\d.*",
+      $filename <: not r".*/app/components/ui/.*",
+      register_diagnostic(span=$s, message="Arbitrary size: use the scale (text-sm, leading-relaxed, ring-3, max-w-4/5, h-13) or a --text-* token. See .claude/rules/app/styling.md, The styling ladder.")
+    },
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`:])(?:bg|text|border|ring|fill|stroke|outline|divide|from|via|to|shadow|decoration|caret|accent)-(?:black|white|slate|gray|zinc|neutral|stone|red|orange|yellow|lime|green|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)(?:[\s\"'`/-]|$).*",
+      $filename <: not r".*/app/components/ui/.*",
+      register_diagnostic(span=$s, message="Palette color: use a semantic token (bg-card, text-muted-foreground, text-primary); emerald-* and amber-* only for real status. See DESIGN.md, Color roles.")
+    },
+    and {
+      $s <: r"(?s).*-\[#[0-9a-fA-F]{3,8}\].*",
+      register_diagnostic(span=$s, message="Hex color in a class: use a semantic token. Values live in app/app.css.")
+    },
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`:])font-(?:bold|extrabold|black)(?:[\s\"'`]|$).*",
+      register_diagnostic(span=$s, message="Weight above 590: use font-medium (510) or font-semibold (590). See DESIGN.md, Type.")
+    },
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`:])animate-(?:pulse|spin|bounce|ping)(?:[\s\"'`]|$).*",
+      register_diagnostic(span=$s, message="Ungated animation: use anim-pulse-dot or anim-spin, which respect reduced motion. See DESIGN.md, Motion.")
+    },
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`:])(?:duration|ease)-.*",
+      register_diagnostic(span=$s, message="Duration or easing class: transitions take --dur-fast and ease-out-expo from the theme defaults in app/app.css.")
+    },
+    and {
+      $s <: r"(?s).*(?:^|[\s\"'`])transition(?:-\S+)?(?:[\s\"'`]|$).*",
+      register_diagnostic(span=$s, message="Ungated transition: prefix it with motion-safe: (motion-safe:transition-colors).")
+    }
+  }
+}
